@@ -83,6 +83,66 @@ PLANNING STEPS (do this mentally before generating):
 5. Assign walls: exterior=true, shared interior=false or door
 6. Place furniture within each room's bounds`;
 
+const MODIFY_PROMPT = `You are an expert architectural floor plan modifier. You will receive an existing floor plan as JSON and a user request to modify it.
+
+Apply the requested changes while maintaining:
+1. PERFECT TILING — the building must remain a single rectangle with no gaps or overlaps
+2. All existing rooms not mentioned in the modification should remain as-is unless they need to move/resize to accommodate changes
+3. Walls, doors, and windows must remain consistent
+4. Furniture must stay within room bounds
+5. All the same rules from the original generation apply
+
+RESPOND WITH ONLY THE COMPLETE UPDATED FLOOR PLAN JSON — no markdown, no explanation, no preamble. Return the FULL floor plan, not just the changed parts.`;
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export async function modifyFloorPlan(
+  currentPlan: FloorPlan,
+  userMessage: string,
+  chatHistory: ChatMessage[]
+): Promise<FloorPlan> {
+  const apiKey = process.env.NEXT_PUBLIC_OPENROUTER_API_KEY || '';
+
+  const messages = [
+    { role: 'system' as const, content: MODIFY_PROMPT },
+    {
+      role: 'user' as const,
+      content: `Here is the current floor plan:\n\n${JSON.stringify(currentPlan, null, 2)}`,
+    },
+    ...chatHistory.map((msg) => ({
+      role: msg.role as 'user' | 'assistant',
+      content: msg.content,
+    })),
+    { role: 'user' as const, content: userMessage },
+  ];
+
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: 'openai/gpt-5.4',
+      max_tokens: 4096,
+      messages,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`AI API error (${response.status}): ${errorText}`);
+  }
+
+  const data = await response.json();
+  const jsonText = data.choices[0].message.content.replace(/```json|```/g, '').trim();
+  const floorPlan: FloorPlan = JSON.parse(jsonText);
+  return floorPlan;
+}
+
 export async function generateFloorPlan(userPrompt: string): Promise<FloorPlan> {
   const apiKey = process.env.NEXT_PUBLIC_OPENROUTER_API_KEY || '';
 

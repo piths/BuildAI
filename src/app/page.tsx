@@ -80,6 +80,7 @@ export default function Home() {
       {mode === 'floorplan' && floorPlan && (
         <FloorPlanView
           floorPlan={floorPlan}
+          onFloorPlanUpdate={setFloorPlan}
           onRegenerate={handleRegenerate}
           onEditPrompt={handleEditPrompt}
           onWalkthrough={handleWalkthrough}

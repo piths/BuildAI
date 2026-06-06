@@ -5,9 +5,11 @@ import { FloorPlan, Room } from '@/lib/types';
 import { SCALE_FACTOR } from '@/lib/constants';
 import { renderFloorPlan, getRoomAtPosition } from '@/lib/floorPlanRenderer';
 import Sidebar from './Sidebar';
+import ChatPanel from './ChatPanel';
 
 interface FloorPlanViewProps {
   floorPlan: FloorPlan;
+  onFloorPlanUpdate: (plan: FloorPlan) => void;
   onRegenerate: () => void;
   onEditPrompt: () => void;
   onWalkthrough: () => void;
@@ -15,6 +17,7 @@ interface FloorPlanViewProps {
 
 export default function FloorPlanView({
   floorPlan,
+  onFloorPlanUpdate,
   onRegenerate,
   onEditPrompt,
   onWalkthrough,
@@ -217,6 +220,9 @@ export default function FloorPlanView({
             ))}
           </div>
         )}
+
+        {/* Chat Panel */}
+        <ChatPanel floorPlan={floorPlan} onFloorPlanUpdate={onFloorPlanUpdate} />
       </div>
 
       {/* Sidebar */}
