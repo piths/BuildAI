@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { FloorPlan, AppMode } from '@/lib/types';
 import { generateFloorPlan } from '@/lib/ai';
+import { saveDesign } from '@/lib/designStorage';
 import PromptView from '@/components/PromptView';
 import FloorPlanView from '@/components/FloorPlanView';
 import WalkthroughView from '@/components/WalkthroughView';
@@ -14,6 +15,7 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastPrompt, setLastPrompt] = useState('');
+  const currentDesignId = useRef<string | null>(null);
 
   const handleGenerate = async (prompt: string) => {
     setIsLoading(true);
@@ -23,6 +25,8 @@ export default function Home() {
     try {
       const plan = await generateFloorPlan(prompt);
       setFloorPlan(plan);
+      // New generation → save as a new design
+      currentDesignId.current = saveDesign(plan);
       setMode('floorplan');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to generate floor plan';
@@ -33,8 +37,22 @@ export default function Home() {
     }
   };
 
+  // Update the saved design whenever the floor plan changes (edits, chat modifications)
+  const handleFloorPlanUpdate = (plan: FloorPlan) => {
+    setFloorPlan(plan);
+    currentDesignId.current = saveDesign(plan, currentDesignId.current || undefined);
+  };
+
+  const handleLoadDesign = (plan: FloorPlan, id: string) => {
+    setFloorPlan(plan);
+    currentDesignId.current = id;
+    setMode('floorplan');
+  };
+
   const handleRegenerate = () => {
     if (lastPrompt) {
+      // Regenerate creates a fresh design
+      currentDesignId.current = null;
       handleGenerate(lastPrompt);
     }
   };
@@ -74,13 +92,14 @@ export default function Home() {
           onGenerate={handleGenerate}
           isLoading={isLoading}
           initialPrompt={lastPrompt}
+          onLoadDesign={handleLoadDesign}
         />
       )}
 
       {mode === 'floorplan' && floorPlan && (
         <FloorPlanView
           floorPlan={floorPlan}
-          onFloorPlanUpdate={setFloorPlan}
+          onFloorPlanUpdate={handleFloorPlanUpdate}
           onRegenerate={handleRegenerate}
           onEditPrompt={handleEditPrompt}
           onWalkthrough={handleWalkthrough}

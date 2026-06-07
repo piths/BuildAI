@@ -7,6 +7,7 @@ interface RenderOptions {
   offsetY: number;
   hoveredRoom: string | null;
   selectedRoom: string | null;
+  selectedFurniture?: { roomIndex: number; furnitureIndex: number } | null;
 }
 
 export function renderFloorPlan(
@@ -16,7 +17,7 @@ export function renderFloorPlan(
   canvasHeight: number,
   options: RenderOptions
 ) {
-  const { scale, offsetX, offsetY, hoveredRoom, selectedRoom } = options;
+  const { scale, offsetX, offsetY, hoveredRoom, selectedRoom, selectedFurniture } = options;
   const s = scale;
 
   // Clear canvas
@@ -49,7 +50,119 @@ export function renderFloorPlan(
     drawDimensions(ctx, room, s);
   }
 
+  // Draw selection handles for selected furniture
+  if (selectedFurniture) {
+    const room = floor.rooms[selectedFurniture.roomIndex];
+    const item = room?.furniture[selectedFurniture.furnitureIndex];
+    if (room && item) {
+      drawFurnitureSelection(ctx, room, item, s);
+    }
+  }
+
   ctx.restore();
+}
+
+const HANDLE_SIZE = 8;
+
+function drawFurnitureSelection(
+  ctx: CanvasRenderingContext2D,
+  room: Room,
+  item: FurnitureItem,
+  scale: number
+) {
+  const fx = (room.x + item.x) * scale;
+  const fy = (room.y + item.y) * scale;
+  const fw = item.widthMeters * scale;
+  const fh = item.depthMeters * scale;
+
+  // Selection outline
+  ctx.save();
+  ctx.strokeStyle = '#00d4ff';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([4, 3]);
+  ctx.strokeRect(fx, fy, fw, fh);
+  ctx.setLineDash([]);
+
+  // Corner resize handles
+  const corners = [
+    [fx, fy],
+    [fx + fw, fy],
+    [fx, fy + fh],
+    [fx + fw, fy + fh],
+  ];
+  ctx.fillStyle = '#00d4ff';
+  ctx.strokeStyle = '#0f0f1a';
+  ctx.lineWidth = 1;
+  for (const [cx, cy] of corners) {
+    ctx.fillRect(cx - HANDLE_SIZE / 2, cy - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+    ctx.strokeRect(cx - HANDLE_SIZE / 2, cy - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+  }
+
+  // Rotate handle (above top edge)
+  const rotX = fx + fw / 2;
+  const rotY = fy - 22;
+  ctx.beginPath();
+  ctx.moveTo(fx + fw / 2, fy);
+  ctx.lineTo(rotX, rotY + HANDLE_SIZE / 2);
+  ctx.strokeStyle = '#00d4ff';
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(rotX, rotY, HANDLE_SIZE / 2 + 1, 0, Math.PI * 2);
+  ctx.fillStyle = '#7c3aed';
+  ctx.fill();
+  ctx.strokeStyle = '#0f0f1a';
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+export type HandleType = 'nw' | 'ne' | 'sw' | 'se' | 'rotate' | null;
+
+export function getFurnitureHandleAtPosition(
+  room: Room,
+  item: FurnitureItem,
+  worldX: number,
+  worldY: number,
+  scale: number
+): HandleType {
+  const fx = (room.x + item.x) * scale;
+  const fy = (room.y + item.y) * scale;
+  const fw = item.widthMeters * scale;
+  const fh = item.depthMeters * scale;
+  const tol = HANDLE_SIZE;
+
+  const near = (px: number, py: number) =>
+    Math.abs(worldX - px) <= tol && Math.abs(worldY - py) <= tol;
+
+  if (near(fx + fw / 2, fy - 22)) return 'rotate';
+  if (near(fx, fy)) return 'nw';
+  if (near(fx + fw, fy)) return 'ne';
+  if (near(fx, fy + fh)) return 'sw';
+  if (near(fx + fw, fy + fh)) return 'se';
+  return null;
+}
+
+export function getFurnitureAtPosition(
+  floor: Floor,
+  worldX: number,
+  worldY: number,
+  scale: number
+): { roomIndex: number; furnitureIndex: number } | null {
+  // Iterate in reverse so top-most furniture is picked first
+  for (let ri = floor.rooms.length - 1; ri >= 0; ri--) {
+    const room = floor.rooms[ri];
+    for (let fi = room.furniture.length - 1; fi >= 0; fi--) {
+      const item = room.furniture[fi];
+      const fx = (room.x + item.x) * scale;
+      const fy = (room.y + item.y) * scale;
+      const fw = item.widthMeters * scale;
+      const fh = item.depthMeters * scale;
+      if (worldX >= fx && worldX <= fx + fw && worldY >= fy && worldY <= fy + fh) {
+        return { roomIndex: ri, furnitureIndex: fi };
+      }
+    }
+  }
+  return null;
 }
 
 function drawGrid(
@@ -358,160 +471,611 @@ function drawFurnitureShape(
   color: string
 ) {
   ctx.strokeStyle = color;
-  ctx.fillStyle = color + '30';
+  ctx.fillStyle = color + '25';
   ctx.lineWidth = 1;
+  const lw = Math.max(0.8, w * 0.02);
+  ctx.lineWidth = lw;
 
   switch (type) {
-    case 'sofa':
-      ctx.fillRect(0, 0, w, h);
-      ctx.strokeRect(0, 0, w, h);
-      // Back cushion
-      ctx.fillRect(0, 0, w, h * 0.25);
-      ctx.strokeRect(0, 0, w, h * 0.25);
+    case 'sofa': {
+      // Realistic top-down sofa: back + seat cushions + arms
+      const armW = w * 0.08;
+      const backD = h * 0.22;
+      // Back
+      ctx.fillStyle = color + '40';
+      roundedRect(ctx, 0, 0, w, backD, 2);
+      ctx.fill();
+      ctx.stroke();
+      // Seat cushions
+      ctx.fillStyle = color + '20';
+      const cushionCount = w > h * 1.5 ? 3 : 2;
+      const cushionW = (w - armW * 2) / cushionCount;
+      for (let i = 0; i < cushionCount; i++) {
+        roundedRect(ctx, armW + i * cushionW + 1, backD + 1, cushionW - 2, h - backD - 2, 3);
+        ctx.fill();
+        ctx.stroke();
+      }
+      // Arms
+      ctx.fillStyle = color + '35';
+      roundedRect(ctx, 0, 0, armW, h, 2);
+      ctx.fill();
+      ctx.stroke();
+      roundedRect(ctx, w - armW, 0, armW, h, 2);
+      ctx.fill();
+      ctx.stroke();
       break;
+    }
+
+    case 'armchair': {
+      const armW = w * 0.15;
+      const backD = h * 0.22;
+      ctx.fillStyle = color + '40';
+      roundedRect(ctx, armW, 0, w - armW * 2, backD, 2);
+      ctx.fill();
+      ctx.stroke();
+      // Seat
+      ctx.fillStyle = color + '20';
+      roundedRect(ctx, armW + 1, backD + 1, w - armW * 2 - 2, h - backD - 2, 4);
+      ctx.fill();
+      ctx.stroke();
+      // Arms
+      ctx.fillStyle = color + '35';
+      roundedRect(ctx, 0, 0, armW, h, 3);
+      ctx.fill();
+      ctx.stroke();
+      roundedRect(ctx, w - armW, 0, armW, h, 3);
+      ctx.fill();
+      ctx.stroke();
+      break;
+    }
 
     case 'single_bed':
-    case 'double_bed':
-      ctx.fillRect(0, 0, w, h);
-      ctx.strokeRect(0, 0, w, h);
-      // Pillow
+    case 'double_bed': {
+      // Bed frame
+      ctx.fillStyle = color + '15';
+      roundedRect(ctx, 0, 0, w, h, 3);
+      ctx.fill();
+      ctx.stroke();
+      // Mattress
+      ctx.fillStyle = color + '08';
+      roundedRect(ctx, w * 0.05, h * 0.05, w * 0.9, h * 0.9, 2);
+      ctx.fill();
+      ctx.stroke();
+      // Pillows
+      ctx.fillStyle = color + '30';
+      if (type === 'double_bed') {
+        roundedRect(ctx, w * 0.08, h * 0.06, w * 0.38, h * 0.15, 4);
+        ctx.fill();
+        ctx.stroke();
+        roundedRect(ctx, w * 0.54, h * 0.06, w * 0.38, h * 0.15, 4);
+        ctx.fill();
+        ctx.stroke();
+      } else {
+        roundedRect(ctx, w * 0.15, h * 0.06, w * 0.7, h * 0.15, 4);
+        ctx.fill();
+        ctx.stroke();
+      }
+      // Blanket fold line
+      ctx.beginPath();
+      ctx.moveTo(w * 0.1, h * 0.35);
+      ctx.lineTo(w * 0.9, h * 0.35);
+      ctx.stroke();
+      break;
+    }
+
+    case 'dining_table': {
+      // Rectangular table with legs visible
+      ctx.fillStyle = color + '20';
+      roundedRect(ctx, 0, 0, w, h, 3);
+      ctx.fill();
+      ctx.stroke();
+      // Leg circles at corners
+      const legR = Math.min(w, h) * 0.06;
       ctx.fillStyle = color + '50';
-      ctx.fillRect(w * 0.15, h * 0.05, w * 0.7, h * 0.15);
-      ctx.strokeRect(w * 0.15, h * 0.05, w * 0.7, h * 0.15);
+      [[w * 0.12, h * 0.12], [w * 0.88, h * 0.12], [w * 0.12, h * 0.88], [w * 0.88, h * 0.88]].forEach(([lx, ly]) => {
+        ctx.beginPath();
+        ctx.arc(lx, ly, legR, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      });
       break;
+    }
 
-    case 'dining_table':
     case 'coffee_table':
-      ctx.fillRect(0, 0, w, h);
-      ctx.strokeRect(0, 0, w, h);
+    case 'side_table': {
+      ctx.fillStyle = color + '18';
+      roundedRect(ctx, 0, 0, w, h, 4);
+      ctx.fill();
+      ctx.stroke();
+      // Inner edge detail
+      roundedRect(ctx, w * 0.1, h * 0.1, w * 0.8, h * 0.8, 3);
+      ctx.stroke();
       break;
+    }
 
-    case 'dining_chair':
+    case 'dining_chair': {
+      // Chair with seat and back visible from top
+      ctx.fillStyle = color + '20';
+      // Seat (slightly rounded square)
+      roundedRect(ctx, w * 0.1, h * 0.25, w * 0.8, h * 0.7, 3);
+      ctx.fill();
+      ctx.stroke();
+      // Back (thicker bar at top)
+      ctx.fillStyle = color + '45';
+      roundedRect(ctx, w * 0.05, 0, w * 0.9, h * 0.2, 2);
+      ctx.fill();
+      ctx.stroke();
+      break;
+    }
+
     case 'desk_chair':
-    case 'office_chair':
+    case 'office_chair': {
+      // Swivel chair — circular seat with 5-star base
+      ctx.fillStyle = color + '15';
+      // Star base
+      const cx = w / 2, cy = h / 2, baseR = Math.min(w, h) * 0.45;
+      for (let i = 0; i < 5; i++) {
+        const angle = (i * Math.PI * 2) / 5 - Math.PI / 2;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + Math.cos(angle) * baseR, cy + Math.sin(angle) * baseR);
+        ctx.stroke();
+        // Caster dot
+        ctx.beginPath();
+        ctx.arc(cx + Math.cos(angle) * baseR, cy + Math.sin(angle) * baseR, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Seat
+      ctx.fillStyle = color + '25';
       ctx.beginPath();
-      ctx.arc(w / 2, h / 2, Math.min(w, h) / 2, 0, Math.PI * 2);
+      ctx.arc(cx, cy, Math.min(w, h) * 0.32, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      // Backrest indicator
+      ctx.fillStyle = color + '40';
+      ctx.beginPath();
+      ctx.arc(cx, cy - Math.min(w, h) * 0.2, Math.min(w, h) * 0.18, Math.PI, 0, false);
       ctx.fill();
       ctx.stroke();
       break;
+    }
 
-    case 'toilet_unit':
-      ctx.beginPath();
-      ctx.ellipse(w / 2, h * 0.6, w * 0.4, h * 0.35, 0, 0, Math.PI * 2);
+    case 'toilet_unit': {
+      // Realistic toilet: tank + bowl
+      ctx.fillStyle = color + '20';
+      // Tank (rectangle at back)
+      roundedRect(ctx, w * 0.2, 0, w * 0.6, h * 0.28, 3);
       ctx.fill();
       ctx.stroke();
-      // Tank
-      ctx.fillRect(w * 0.15, 0, w * 0.7, h * 0.25);
-      ctx.strokeRect(w * 0.15, 0, w * 0.7, h * 0.25);
-      break;
-
-    case 'bathtub':
-      roundedRect(ctx, 0, 0, w, h, 8);
+      // Bowl (oval)
+      ctx.beginPath();
+      ctx.ellipse(w / 2, h * 0.62, w * 0.38, h * 0.34, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
-      roundedRect(ctx, w * 0.1, h * 0.1, w * 0.8, h * 0.8, 6);
-      ctx.stroke();
-      break;
-
-    case 'shower':
-      ctx.fillRect(0, 0, w, h);
-      ctx.strokeRect(0, 0, w, h);
-      // X pattern
+      // Seat outline
       ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.lineTo(w, h);
-      ctx.moveTo(w, 0);
-      ctx.lineTo(0, h);
+      ctx.ellipse(w / 2, h * 0.62, w * 0.28, h * 0.26, 0, 0, Math.PI * 2);
       ctx.stroke();
       break;
+    }
 
-    case 'refrigerator':
-      ctx.fillRect(0, 0, w, h);
-      ctx.strokeRect(0, 0, w, h);
+    case 'bathtub': {
+      // Bathtub: rounded outer, inner basin
+      ctx.fillStyle = color + '15';
+      roundedRect(ctx, 0, 0, w, h, Math.min(w, h) * 0.2);
+      ctx.fill();
+      ctx.stroke();
+      // Inner
+      ctx.fillStyle = color + '08';
+      roundedRect(ctx, w * 0.08, h * 0.08, w * 0.84, h * 0.84, Math.min(w, h) * 0.15);
+      ctx.fill();
+      ctx.stroke();
+      // Drain
+      ctx.beginPath();
+      ctx.arc(w * 0.5, h * 0.85, Math.min(w, h) * 0.04, 0, Math.PI * 2);
+      ctx.stroke();
+      // Faucet
+      ctx.beginPath();
+      ctx.arc(w * 0.5, h * 0.1, Math.min(w, h) * 0.05, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      break;
+    }
+
+    case 'shower': {
+      // Shower tray with drain and head
+      ctx.fillStyle = color + '12';
+      roundedRect(ctx, 0, 0, w, h, 4);
+      ctx.fill();
+      ctx.stroke();
+      // Diagonal lines (water texture)
+      ctx.lineWidth = 0.5;
+      ctx.strokeStyle = color + '40';
+      for (let i = 1; i < 5; i++) {
+        ctx.beginPath();
+        ctx.moveTo(w * (i / 5), 0);
+        ctx.lineTo(0, h * (i / 5));
+        ctx.stroke();
+      }
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lw;
+      // Drain circle center
+      ctx.beginPath();
+      ctx.arc(w / 2, h / 2, Math.min(w, h) * 0.08, 0, Math.PI * 2);
+      ctx.stroke();
+      // Shower head dot (corner)
+      ctx.fillStyle = color + '60';
+      ctx.beginPath();
+      ctx.arc(w * 0.15, h * 0.15, Math.min(w, h) * 0.06, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      break;
+    }
+
+    case 'refrigerator': {
+      ctx.fillStyle = color + '25';
+      roundedRect(ctx, 0, 0, w, h, 2);
+      ctx.fill();
+      ctx.stroke();
+      // Split line (freezer/fridge)
+      ctx.beginPath();
+      ctx.moveTo(w * 0.1, h * 0.3);
+      ctx.lineTo(w * 0.9, h * 0.3);
+      ctx.stroke();
       // Handle
+      ctx.lineWidth = lw * 1.5;
       ctx.beginPath();
-      ctx.arc(w * 0.85, h * 0.5, w * 0.08, 0, Math.PI * 2);
+      ctx.moveTo(w * 0.8, h * 0.1);
+      ctx.lineTo(w * 0.8, h * 0.25);
       ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(w * 0.8, h * 0.4);
+      ctx.lineTo(w * 0.8, h * 0.85);
+      ctx.stroke();
+      ctx.lineWidth = lw;
       break;
+    }
 
-    case 'stove':
-      ctx.fillRect(0, 0, w, h);
-      ctx.strokeRect(0, 0, w, h);
-      // Burners
-      const bSize = Math.min(w, h) * 0.18;
-      ctx.beginPath();
-      ctx.arc(w * 0.3, h * 0.3, bSize, 0, Math.PI * 2);
+    case 'stove': {
+      ctx.fillStyle = color + '20';
+      roundedRect(ctx, 0, 0, w, h, 2);
+      ctx.fill();
       ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(w * 0.7, h * 0.3, bSize, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(w * 0.3, h * 0.7, bSize, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(w * 0.7, h * 0.7, bSize, 0, Math.PI * 2);
-      ctx.stroke();
+      // 4 burner rings (double circles)
+      const positions = [[0.3, 0.3], [0.7, 0.3], [0.3, 0.7], [0.7, 0.7]];
+      const bR = Math.min(w, h) * 0.14;
+      positions.forEach(([bx, by]) => {
+        ctx.beginPath();
+        ctx.arc(w * bx, h * by, bR, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(w * bx, h * by, bR * 0.55, 0, Math.PI * 2);
+        ctx.stroke();
+      });
       break;
+    }
 
-    case 'wardrobe':
-      ctx.fillRect(0, 0, w, h);
-      ctx.strokeRect(0, 0, w, h);
-      // Center line
+    case 'wardrobe': {
+      ctx.fillStyle = color + '20';
+      roundedRect(ctx, 0, 0, w, h, 2);
+      ctx.fill();
+      ctx.stroke();
+      // Double door with handles
       ctx.beginPath();
       ctx.moveTo(w / 2, 0);
       ctx.lineTo(w / 2, h);
       ctx.stroke();
+      // Handles
+      ctx.beginPath();
+      ctx.arc(w * 0.42, h / 2, 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(w * 0.58, h / 2, 2, 0, Math.PI * 2);
+      ctx.fill();
       break;
+    }
 
-    case 'tv_stand':
-      ctx.fillRect(0, 0, w, h);
-      ctx.strokeRect(0, 0, w, h);
+    case 'tv_stand': {
+      // TV stand with TV on top (top-down shows the thin screen)
+      ctx.fillStyle = color + '20';
+      roundedRect(ctx, 0, h * 0.4, w, h * 0.6, 2);
+      ctx.fill();
+      ctx.stroke();
+      // TV (thin rectangle)
+      ctx.fillStyle = color + '50';
+      ctx.fillRect(w * 0.05, 0, w * 0.9, h * 0.12);
+      ctx.strokeRect(w * 0.05, 0, w * 0.9, h * 0.12);
       break;
+    }
 
-    case 'bookshelf':
-      ctx.fillRect(0, 0, w, h);
-      ctx.strokeRect(0, 0, w, h);
-      // Shelves
-      for (let i = 1; i < 4; i++) {
+    case 'bookshelf': {
+      ctx.fillStyle = color + '20';
+      roundedRect(ctx, 0, 0, w, h, 1);
+      ctx.fill();
+      ctx.stroke();
+      // Book spines (vertical lines)
+      ctx.lineWidth = 0.6;
+      const bookCount = Math.max(4, Math.floor(w / 4));
+      for (let i = 1; i < bookCount; i++) {
         ctx.beginPath();
-        ctx.moveTo(0, (h / 4) * i);
-        ctx.lineTo(w, (h / 4) * i);
+        ctx.moveTo((w / bookCount) * i, h * 0.05);
+        ctx.lineTo((w / bookCount) * i, h * 0.95);
         ctx.stroke();
       }
+      ctx.lineWidth = lw;
       break;
+    }
 
     case 'kitchen_counter':
-    case 'kitchen_island':
-      ctx.fillRect(0, 0, w, h);
-      ctx.strokeRect(0, 0, w, h);
-      break;
-
-    case 'potted_plant':
+    case 'kitchen_island': {
+      ctx.fillStyle = color + '18';
+      roundedRect(ctx, 0, 0, w, h, 2);
+      ctx.fill();
+      ctx.stroke();
+      // Counter edge detail
       ctx.beginPath();
-      ctx.arc(w / 2, h / 2, Math.min(w, h) * 0.4, 0, Math.PI * 2);
-      ctx.fillStyle = '#10b98140';
+      ctx.moveTo(w * 0.05, h * 0.15);
+      ctx.lineTo(w * 0.95, h * 0.15);
+      ctx.stroke();
+      break;
+    }
+
+    case 'sink':
+    case 'bathroom_sink': {
+      // Sink: counter with basin
+      ctx.fillStyle = color + '18';
+      roundedRect(ctx, 0, 0, w, h, 2);
+      ctx.fill();
+      ctx.stroke();
+      // Basin (oval)
+      ctx.fillStyle = color + '10';
+      ctx.beginPath();
+      ctx.ellipse(w / 2, h * 0.55, w * 0.3, h * 0.3, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      // Faucet
+      ctx.fillStyle = color + '50';
+      ctx.beginPath();
+      ctx.arc(w / 2, h * 0.2, Math.min(w, h) * 0.06, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      break;
+    }
+
+    case 'potted_plant': {
+      // Pot circle with foliage
+      ctx.fillStyle = '#10b98120';
+      ctx.beginPath();
+      ctx.arc(w / 2, h / 2, Math.min(w, h) * 0.42, 0, Math.PI * 2);
       ctx.fill();
       ctx.strokeStyle = '#10b981';
       ctx.stroke();
+      // Inner leaves pattern
+      ctx.fillStyle = '#10b98140';
+      ctx.beginPath();
+      ctx.arc(w / 2, h / 2, Math.min(w, h) * 0.22, 0, Math.PI * 2);
+      ctx.fill();
+      // Pot rim
+      ctx.beginPath();
+      ctx.arc(w / 2, h / 2, Math.min(w, h) * 0.15, 0, Math.PI * 2);
+      ctx.strokeStyle = '#92400e80';
+      ctx.stroke();
+      ctx.strokeStyle = color;
       break;
+    }
 
     case 'desk':
-    case 'office_desk':
-      ctx.fillRect(0, 0, w, h);
-      ctx.strokeRect(0, 0, w, h);
-      break;
-
-    case 'bathroom_sink':
-    case 'sink':
-      ctx.beginPath();
-      ctx.ellipse(w / 2, h / 2, w * 0.4, h * 0.4, 0, 0, Math.PI * 2);
+    case 'office_desk': {
+      // L-shaped or rectangular desk with detail
+      ctx.fillStyle = color + '18';
+      roundedRect(ctx, 0, 0, w, h, 2);
       ctx.fill();
       ctx.stroke();
+      // Keyboard area
+      ctx.strokeStyle = color + '40';
+      roundedRect(ctx, w * 0.2, h * 0.5, w * 0.5, h * 0.2, 2);
+      ctx.stroke();
+      // Monitor
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color + '30';
+      ctx.fillRect(w * 0.25, h * 0.08, w * 0.5, h * 0.08);
+      ctx.strokeRect(w * 0.25, h * 0.08, w * 0.5, h * 0.08);
       break;
+    }
+
+    case 'dresser':
+    case 'nightstand': {
+      ctx.fillStyle = color + '20';
+      roundedRect(ctx, 0, 0, w, h, 2);
+      ctx.fill();
+      ctx.stroke();
+      // Drawer lines
+      const drawers = type === 'nightstand' ? 2 : 3;
+      for (let i = 1; i < drawers; i++) {
+        ctx.beginPath();
+        ctx.moveTo(w * 0.05, (h / drawers) * i);
+        ctx.lineTo(w * 0.95, (h / drawers) * i);
+        ctx.stroke();
+      }
+      // Handles
+      for (let i = 0; i < drawers; i++) {
+        ctx.beginPath();
+        ctx.arc(w / 2, (h / drawers) * i + (h / drawers) / 2, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      break;
+    }
+
+    case 'mirror_cabinet': {
+      ctx.fillStyle = color + '15';
+      roundedRect(ctx, 0, 0, w, h, 2);
+      ctx.fill();
+      ctx.stroke();
+      // Mirror reflection lines
+      ctx.strokeStyle = color + '30';
+      ctx.beginPath();
+      ctx.moveTo(w * 0.2, h * 0.2);
+      ctx.lineTo(w * 0.4, h * 0.8);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(w * 0.35, h * 0.15);
+      ctx.lineTo(w * 0.55, h * 0.75);
+      ctx.stroke();
+      ctx.strokeStyle = color;
+      break;
+    }
+
+    case 'filing_cabinet': {
+      ctx.fillStyle = color + '22';
+      roundedRect(ctx, 0, 0, w, h, 1);
+      ctx.fill();
+      ctx.stroke();
+      // Drawer fronts
+      for (let i = 0; i < 3; i++) {
+        const dy = h * 0.05 + (h * 0.3) * i;
+        roundedRect(ctx, w * 0.08, dy, w * 0.84, h * 0.26, 1);
+        ctx.stroke();
+        // Handle
+        ctx.beginPath();
+        ctx.moveTo(w * 0.35, dy + h * 0.13);
+        ctx.lineTo(w * 0.65, dy + h * 0.13);
+        ctx.stroke();
+      }
+      break;
+    }
+
+    case 'whiteboard': {
+      ctx.fillStyle = '#ffffff20';
+      roundedRect(ctx, 0, 0, w, h, 1);
+      ctx.fill();
+      ctx.stroke();
+      // Frame
+      roundedRect(ctx, w * 0.03, h * 0.03, w * 0.94, h * 0.94, 1);
+      ctx.stroke();
+      break;
+    }
+
+    case 'printer': {
+      ctx.fillStyle = color + '22';
+      roundedRect(ctx, 0, h * 0.2, w, h * 0.8, 2);
+      ctx.fill();
+      ctx.stroke();
+      // Paper tray
+      ctx.fillStyle = '#ffffff15';
+      ctx.fillRect(w * 0.15, 0, w * 0.7, h * 0.25);
+      ctx.strokeRect(w * 0.15, 0, w * 0.7, h * 0.25);
+      break;
+    }
+
+    case 'lamp': {
+      // Concentric circles (light glow effect)
+      ctx.fillStyle = color + '08';
+      ctx.beginPath();
+      ctx.arc(w / 2, h / 2, Math.min(w, h) * 0.45, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = color + '20';
+      ctx.beginPath();
+      ctx.arc(w / 2, h / 2, Math.min(w, h) * 0.25, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = color + '50';
+      ctx.beginPath();
+      ctx.arc(w / 2, h / 2, Math.min(w, h) * 0.08, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
+
+    case 'coat_rack': {
+      ctx.beginPath();
+      ctx.arc(w / 2, h / 2, Math.min(w, h) * 0.35, 0, Math.PI * 2);
+      ctx.stroke();
+      // Hooks radiating out
+      for (let i = 0; i < 6; i++) {
+        const angle = (i * Math.PI * 2) / 6;
+        const r = Math.min(w, h) * 0.35;
+        ctx.beginPath();
+        ctx.arc(w / 2 + Math.cos(angle) * r, h / 2 + Math.sin(angle) * r, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Center pole
+      ctx.fillStyle = color + '40';
+      ctx.beginPath();
+      ctx.arc(w / 2, h / 2, 3, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
+
+    case 'shoe_rack': {
+      ctx.fillStyle = color + '18';
+      roundedRect(ctx, 0, 0, w, h, 2);
+      ctx.fill();
+      ctx.stroke();
+      // Shelf slats
+      for (let i = 1; i <= 2; i++) {
+        ctx.beginPath();
+        ctx.moveTo(0, (h / 3) * i);
+        ctx.lineTo(w, (h / 3) * i);
+        ctx.stroke();
+      }
+      break;
+    }
+
+    case 'rug': {
+      ctx.fillStyle = color + '12';
+      roundedRect(ctx, 0, 0, w, h, 2);
+      ctx.fill();
+      // Border pattern
+      ctx.strokeStyle = color + '30';
+      roundedRect(ctx, w * 0.06, h * 0.06, w * 0.88, h * 0.88, 2);
+      ctx.stroke();
+      roundedRect(ctx, w * 0.12, h * 0.12, w * 0.76, h * 0.76, 2);
+      ctx.stroke();
+      ctx.strokeStyle = color;
+      break;
+    }
+
+    case 'chandelier': {
+      // Top-down: circular fixture
+      ctx.fillStyle = color + '15';
+      ctx.beginPath();
+      ctx.arc(w / 2, h / 2, Math.min(w, h) * 0.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      // Light points
+      ctx.fillStyle = '#fbbf2460';
+      for (let i = 0; i < 6; i++) {
+        const angle = (i * Math.PI * 2) / 6;
+        const r = Math.min(w, h) * 0.28;
+        ctx.beginPath();
+        ctx.arc(w / 2 + Math.cos(angle) * r, h / 2 + Math.sin(angle) * r, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      break;
+    }
+
+    case 'sideboard': {
+      ctx.fillStyle = color + '20';
+      roundedRect(ctx, 0, 0, w, h, 2);
+      ctx.fill();
+      ctx.stroke();
+      // Door lines
+      ctx.beginPath();
+      ctx.moveTo(w * 0.33, h * 0.05);
+      ctx.lineTo(w * 0.33, h * 0.95);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(w * 0.66, h * 0.05);
+      ctx.lineTo(w * 0.66, h * 0.95);
+      ctx.stroke();
+      break;
+    }
 
     default:
-      ctx.fillRect(0, 0, w, h);
-      ctx.strokeRect(0, 0, w, h);
+      ctx.fillStyle = color + '15';
+      roundedRect(ctx, 0, 0, w, h, 2);
+      ctx.fill();
+      ctx.stroke();
       break;
   }
 }

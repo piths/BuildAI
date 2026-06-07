@@ -99,15 +99,65 @@ export interface ChatMessage {
   content: string;
 }
 
+async function callGenerateApi(
+  systemPrompt: string,
+  messages: Array<{ role: string; content: unknown }>
+): Promise<FloorPlan> {
+  const response = await fetch('/api/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ systemPrompt, messages }),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || `Request failed (${response.status})`);
+  }
+  return data.floorPlan as FloorPlan;
+}
+
+export function isSignedInWithChatGPT(): boolean {
+  if (typeof document === 'undefined') return false;
+  return document.cookie.includes('chatgpt_signed_in=1');
+}
+
+export async function signOutChatGPT(): Promise<void> {
+  await fetch('/api/auth/logout', { method: 'POST' });
+}
+
+export function startChatGPTSignIn(): void {
+  window.location.href = '/api/auth/login';
+}
+
+export interface UsageWindow {
+  usedPercent: number | null;
+  windowMinutes: number | null;
+  resetsInSeconds: number | null;
+}
+
+export interface UsageInfo {
+  signedIn: boolean;
+  available?: boolean;
+  reason?: string;
+  primary?: UsageWindow;
+  secondary?: UsageWindow;
+}
+
+export async function fetchUsage(): Promise<UsageInfo> {
+  const response = await fetch('/api/usage');
+  return response.json();
+}
+
+export async function generateFloorPlan(userPrompt: string): Promise<FloorPlan> {
+  return callGenerateApi(SYSTEM_PROMPT, [{ role: 'user', content: userPrompt }]);
+}
+
 export async function modifyFloorPlan(
   currentPlan: FloorPlan,
   userMessage: string,
   chatHistory: ChatMessage[],
   imageBase64?: string
 ): Promise<FloorPlan> {
-  const apiKey = process.env.NEXT_PUBLIC_OPENROUTER_API_KEY || '';
-
-  // Build the user content — supports text + image multimodal
   let userContent: string | Array<{ type: string; text?: string; image_url?: { url: string } }>;
   if (imageBase64) {
     userContent = [
@@ -120,68 +170,13 @@ export async function modifyFloorPlan(
   }
 
   const messages: Array<{ role: string; content: unknown }> = [
-    { role: 'system', content: MODIFY_PROMPT },
     {
       role: 'user',
       content: `Here is the current floor plan:\n\n${JSON.stringify(currentPlan, null, 2)}`,
     },
-    ...chatHistory.map((msg) => ({
-      role: msg.role,
-      content: msg.content,
-    })),
+    ...chatHistory.map((msg) => ({ role: msg.role, content: msg.content })),
     { role: 'user', content: userContent },
   ];
 
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: 'openai/gpt-5.4',
-      max_tokens: 16384,
-      messages,
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`AI API error (${response.status}): ${errorText}`);
-  }
-
-  const data = await response.json();
-  const jsonText = data.choices[0].message.content.replace(/```json|```/g, '').trim();
-  const floorPlan: FloorPlan = JSON.parse(jsonText);
-  return floorPlan;
-}
-
-export async function generateFloorPlan(userPrompt: string): Promise<FloorPlan> {
-  const apiKey = process.env.NEXT_PUBLIC_OPENROUTER_API_KEY || '';
-
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: 'openai/gpt-5.4',
-      max_tokens: 16384,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userPrompt },
-      ],
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`AI API error (${response.status}): ${errorText}`);
-  }
-
-  const data = await response.json();
-  const jsonText = data.choices[0].message.content.replace(/```json|```/g, '').trim();
-  const floorPlan: FloorPlan = JSON.parse(jsonText);
-  return floorPlan;
+  return callGenerateApi(MODIFY_PROMPT, messages);
 }
