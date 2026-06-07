@@ -14,27 +14,60 @@ export default function ChatPanel({ floorPlan, onFloorPlanUpdate }: ChatPanelPro
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [attachedImage, setAttachedImage] = useState<string | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  const handleImageAttach = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = reader.result as string;
+      setAttachedImage(base64);
+      setImagePreview(base64);
+    };
+    reader.readAsDataURL(file);
+
+    // Reset input so same file can be re-attached
+    e.target.value = '';
+  };
+
+  const removeImage = () => {
+    setAttachedImage(null);
+    setImagePreview(null);
+  };
+
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || isLoading) return;
+    if ((!input.trim() && !attachedImage) || isLoading) return;
 
     const userMessage = input.trim();
+    const image = attachedImage;
     setInput('');
-    setMessages((prev) => [...prev, { role: 'user', content: userMessage }]);
+    setAttachedImage(null);
+    setImagePreview(null);
+
+    const displayMsg = image
+      ? `${userMessage}${userMessage ? '' : '(image attached)'} 📎`
+      : userMessage;
+    setMessages((prev) => [...prev, { role: 'user', content: displayMsg }]);
     setIsLoading(true);
 
     try {
-      const updatedPlan = await modifyFloorPlan(floorPlan, userMessage, messages);
+      const updatedPlan = await modifyFloorPlan(floorPlan, userMessage, messages, image || undefined);
       onFloorPlanUpdate(updatedPlan);
       setMessages((prev) => [
         ...prev,
-        { role: 'assistant', content: 'Done! I\'ve updated the floor plan.' },
+        { role: 'assistant', content: "Done! I've updated the floor plan." },
       ]);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : 'Failed to modify plan';
@@ -62,7 +95,7 @@ export default function ChatPanel({ floorPlan, onFloorPlanUpdate }: ChatPanelPro
   }
 
   return (
-    <div className="absolute bottom-4 left-4 z-20 w-96 h-[420px] bg-bg-secondary/95 backdrop-blur-md border border-border-custom rounded-xl shadow-2xl flex flex-col overflow-hidden">
+    <div className="absolute bottom-4 left-4 z-20 w-96 h-[450px] bg-bg-secondary/95 backdrop-blur-md border border-border-custom rounded-xl shadow-2xl flex flex-col overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border-custom">
         <div className="flex items-center gap-2">
@@ -80,9 +113,9 @@ export default function ChatPanel({ floorPlan, onFloorPlanUpdate }: ChatPanelPro
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
         {messages.length === 0 && (
-          <div className="text-center py-8">
+          <div className="text-center py-6">
             <p className="text-text-secondary/60 text-xs font-body mb-3">
-              Describe changes to your floor plan
+              Describe changes or attach a reference image
             </p>
             <div className="space-y-1.5">
               {[
@@ -135,9 +168,51 @@ export default function ChatPanel({ floorPlan, onFloorPlanUpdate }: ChatPanelPro
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Image Preview */}
+      {imagePreview && (
+        <div className="px-3 py-2 border-t border-border-custom/50 flex items-center gap-2">
+          <div className="relative">
+            <img
+              src={imagePreview}
+              alt="Attached"
+              className="w-12 h-12 object-cover rounded-lg border border-border-custom"
+            />
+            <button
+              onClick={removeImage}
+              className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white rounded-full text-[10px] flex items-center justify-center hover:bg-red-400"
+            >
+              ×
+            </button>
+          </div>
+          <span className="text-text-secondary/60 text-[10px] font-mono">Image attached</span>
+        </div>
+      )}
+
       {/* Input */}
       <form onSubmit={handleSend} className="px-3 py-3 border-t border-border-custom">
         <div className="flex gap-2">
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            onChange={handleImageAttach}
+            className="hidden"
+          />
+
+          {/* Image attach button */}
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isLoading}
+            className="px-2 py-2 bg-bg-primary/60 border border-border-custom rounded-lg text-text-secondary hover:text-accent-primary hover:border-accent-primary/30 transition-all disabled:opacity-40"
+            title="Attach reference image"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M3.75 21h16.5A2.25 2.25 0 0022.5 18.75V5.25A2.25 2.25 0 0020.25 3H3.75A2.25 2.25 0 001.5 5.25v13.5A2.25 2.25 0 003.75 21z" />
+            </svg>
+          </button>
+
           <input
             type="text"
             value={input}
@@ -148,7 +223,7 @@ export default function ChatPanel({ floorPlan, onFloorPlanUpdate }: ChatPanelPro
           />
           <button
             type="submit"
-            disabled={!input.trim() || isLoading}
+            disabled={(!input.trim() && !attachedImage) || isLoading}
             className="px-3 py-2 bg-accent-primary text-bg-primary rounded-lg text-xs font-medium disabled:opacity-40 hover:bg-accent-primary/90 transition-all"
           >
             Send

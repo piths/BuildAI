@@ -232,29 +232,38 @@ function drawDoorSymbol(
 ) {
   ctx.save();
   ctx.strokeStyle = '#00d4ff';
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = 1.2;
 
   if (direction === 'horizontal') {
-    const dx = wallX + posStart;
-    const dy = wallY;
-    // Door swing arc
+    // Door on a horizontal wall (north or south)
+    // Hinge at left side of opening, door swings inward (downward from north wall, upward from south wall)
+    const hx = wallX + posStart;
+    const hy = wallY;
+
+    // Draw a small quarter-circle arc representing the door swing
     ctx.beginPath();
-    ctx.arc(dx, dy, width, 0, -Math.PI / 2, true);
+    ctx.arc(hx, hy, width, 0, Math.PI / 2, false);
     ctx.stroke();
-    // Door leaf line
+
+    // Door leaf (line from hinge to end of arc)
     ctx.beginPath();
-    ctx.moveTo(dx, dy);
-    ctx.lineTo(dx, dy - width);
+    ctx.moveTo(hx, hy);
+    ctx.lineTo(hx + width, hy);
     ctx.stroke();
   } else {
-    const dx = wallX;
-    const dy = wallY + posStart;
+    // Door on a vertical wall (east or west)
+    // Hinge at top of opening, door swings inward
+    const hx = wallX;
+    const hy = wallY + posStart;
+
     ctx.beginPath();
-    ctx.arc(dx, dy, width, 0, Math.PI / 2, false);
+    ctx.arc(hx, hy, width, Math.PI / 2, Math.PI, false);
     ctx.stroke();
+
+    // Door leaf
     ctx.beginPath();
-    ctx.moveTo(dx, dy);
-    ctx.lineTo(dx + width, dy);
+    ctx.moveTo(hx, hy);
+    ctx.lineTo(hx, hy + width);
     ctx.stroke();
   }
   ctx.restore();

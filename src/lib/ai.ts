@@ -102,21 +102,34 @@ export interface ChatMessage {
 export async function modifyFloorPlan(
   currentPlan: FloorPlan,
   userMessage: string,
-  chatHistory: ChatMessage[]
+  chatHistory: ChatMessage[],
+  imageBase64?: string
 ): Promise<FloorPlan> {
   const apiKey = process.env.NEXT_PUBLIC_OPENROUTER_API_KEY || '';
 
-  const messages = [
-    { role: 'system' as const, content: MODIFY_PROMPT },
+  // Build the user content — supports text + image multimodal
+  let userContent: string | Array<{ type: string; text?: string; image_url?: { url: string } }>;
+  if (imageBase64) {
+    userContent = [
+      ...(userMessage ? [{ type: 'text' as const, text: userMessage }] : []),
+      { type: 'image_url' as const, image_url: { url: imageBase64 } },
+      { type: 'text' as const, text: 'Based on the above image and/or instructions, modify the current floor plan. Return the FULL updated JSON.' },
+    ];
+  } else {
+    userContent = userMessage;
+  }
+
+  const messages: Array<{ role: string; content: unknown }> = [
+    { role: 'system', content: MODIFY_PROMPT },
     {
-      role: 'user' as const,
+      role: 'user',
       content: `Here is the current floor plan:\n\n${JSON.stringify(currentPlan, null, 2)}`,
     },
     ...chatHistory.map((msg) => ({
-      role: msg.role as 'user' | 'assistant',
+      role: msg.role,
       content: msg.content,
     })),
-    { role: 'user' as const, content: userMessage },
+    { role: 'user', content: userContent },
   ];
 
   const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -127,7 +140,7 @@ export async function modifyFloorPlan(
     },
     body: JSON.stringify({
       model: 'openai/gpt-5.4',
-      max_tokens: 4096,
+      max_tokens: 16384,
       messages,
     }),
   });
@@ -154,7 +167,7 @@ export async function generateFloorPlan(userPrompt: string): Promise<FloorPlan> 
     },
     body: JSON.stringify({
       model: 'openai/gpt-5.4',
-      max_tokens: 4096,
+      max_tokens: 16384,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: userPrompt },
