@@ -2,6 +2,8 @@
 
 import { FloorPlan, Floor, Room } from '@/lib/types';
 import { ROOM_COLORS, COST_PER_SQM } from '@/lib/constants';
+import { downloadDxf } from '@/lib/dxf';
+import { downloadIfc } from '@/lib/ifc';
 
 interface SidebarProps {
   floorPlan: FloorPlan;
@@ -170,6 +172,29 @@ export default function Sidebar({
           >
             📄 Export PNG
           </button>
+        </div>
+
+        {/* CAD / BIM export */}
+        <div className="pt-1">
+          <p className="text-text-secondary/50 text-[10px] font-mono uppercase tracking-wider mb-1.5 px-1">
+            CAD / BIM Export
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => downloadDxf(floorPlan, currentFloor)}
+              className="px-3 py-2 bg-bg-card border border-accent-primary/20 text-text-secondary text-xs rounded-lg hover:text-accent-primary hover:border-accent-primary/40 transition-all font-body"
+              title="Export to DXF — opens in AutoCAD, ArchiCAD, QCAD"
+            >
+              📐 DXF (CAD)
+            </button>
+            <button
+              onClick={() => downloadIfc(floorPlan)}
+              className="px-3 py-2 bg-bg-card border border-accent-secondary/20 text-text-secondary text-xs rounded-lg hover:text-accent-secondary hover:border-accent-secondary/40 transition-all font-body"
+              title="Export to IFC — BIM model for ArchiCAD, Revit"
+            >
+              🏛️ IFC (BIM)
+            </button>
+          </div>
         </div>
       </div>
     </div>

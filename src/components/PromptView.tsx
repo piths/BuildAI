@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Circle } from 'lucide-react';
 import { PRESET_PROMPTS } from '@/lib/constants';
 import { isSignedInWithChatGPT, signOutChatGPT, startChatGPTSignIn } from '@/lib/ai';
 import { FloorPlan } from '@/lib/types';
 import { ElegantShape } from './ui/shape-landing-hero';
+import { importDxf } from '@/lib/dxf';
 import UsageBadge from './UsageBadge';
 import SavedDesigns from './SavedDesigns';
 import Showcase from './Showcase';
@@ -34,6 +35,9 @@ interface PromptViewProps {
 export default function PromptView({ onGenerate, isLoading, initialPrompt = '', onLoadDesign }: PromptViewProps) {
   const [prompt, setPrompt] = useState(initialPrompt);
   const [signedIn, setSignedIn] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const dxfInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setSignedIn(isSignedInWithChatGPT());
@@ -48,6 +52,56 @@ export default function PromptView({ onGenerate, isLoading, initialPrompt = '', 
     if (prompt.trim() && !isLoading) {
       onGenerate(prompt.trim());
     }
+  };
+
+  const loadDxfText = (dxfText: string) => {
+    const plan = importDxf(dxfText);
+    if (!plan || plan.floors[0].rooms.length === 0) {
+      setImportError('No rooms found. Use closed polylines for room outlines.');
+      return;
+    }
+    onLoadDesign(plan, `imported_${Date.now()}`);
+  };
+
+  const handleDxfImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setImportError(null);
+
+    const isDwg = file.name.toLowerCase().endsWith('.dwg');
+
+    if (isDwg) {
+      // Convert DWG → DXF server-side, then import
+      setImporting(true);
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await fetch('/api/convert-dwg', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) {
+          setImportError(data.error || 'DWG conversion failed.');
+          return;
+        }
+        loadDxfText(data.dxf);
+      } catch {
+        setImportError('Could not convert the DWG file.');
+      } finally {
+        setImporting(false);
+      }
+      return;
+    }
+
+    // Plain DXF
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        loadDxfText(reader.result as string);
+      } catch {
+        setImportError('Could not read that DXF file.');
+      }
+    };
+    reader.readAsText(file);
   };
 
   const handleSignIn = () => {
@@ -254,7 +308,42 @@ export default function PromptView({ onGenerate, isLoading, initialPrompt = '', 
 
         {/* Preset Prompts */}
         <div className="mb-16">
-          <p className="text-text-secondary text-sm mb-4 text-center font-body">Or try an example:</p>
+          <div className="flex items-center justify-center gap-3 mb-4">
+            <p className="text-text-secondary text-sm font-body">Or try an example:</p>
+            <span className="text-text-secondary/30">·</span>
+            <button
+              onClick={() => dxfInputRef.current?.click()}
+              disabled={importing}
+              className="text-accent-primary/80 hover:text-accent-primary text-sm font-body flex items-center gap-1.5 transition-colors disabled:opacity-50"
+            >
+              {importing ? (
+                <>
+                  <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" opacity="0.3" />
+                    <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                  </svg>
+                  Converting...
+                </>
+              ) : (
+                <>
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                  </svg>
+                  Import DXF / DWG
+                </>
+              )}
+            </button>
+            <input
+              ref={dxfInputRef}
+              type="file"
+              accept=".dxf,.dwg"
+              onChange={handleDxfImport}
+              className="hidden"
+            />
+          </div>
+          {importError && (
+            <p className="text-accent-warning text-xs font-body text-center mb-3">{importError}</p>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {PRESET_PROMPTS.map((preset, i) => (
               <button
