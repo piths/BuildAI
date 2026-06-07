@@ -2,7 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 
 const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 const TOKEN_URL = 'https://auth.openai.com/oauth/token';
-const REDIRECT_URI = 'http://localhost:1455/auth/callback';
+
+function getRedirectUri(request: NextRequest): string {
+  if (process.env.OAUTH_REDIRECT_URI) return process.env.OAUTH_REDIRECT_URI;
+  return `${request.nextUrl.origin}/auth/callback`;
+}
 
 // Decode a JWT payload (no verification — just to extract account id)
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
@@ -46,6 +50,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(`${origin}/?auth_error=state_mismatch`);
   }
 
+  const redirectUri = getRedirectUri(request);
+  const isSecure = redirectUri.startsWith('https://');
+
   // Exchange code for tokens
   const tokenResponse = await fetch(TOKEN_URL, {
     method: 'POST',
@@ -54,7 +61,7 @@ export async function GET(request: NextRequest) {
       grant_type: 'authorization_code',
       client_id: CLIENT_ID,
       code,
-      redirect_uri: REDIRECT_URI,
+      redirect_uri: redirectUri,
       code_verifier: savedVerifier,
     }).toString(),
   });
@@ -75,7 +82,7 @@ export async function GET(request: NextRequest) {
   // Store tokens in httpOnly cookies (server-side use only)
   response.cookies.set('chatgpt_access_token', accessToken, {
     httpOnly: true,
-    secure: false,
+    secure: isSecure,
     sameSite: 'lax',
     maxAge: 60 * 60 * 24 * 7,
     path: '/',
@@ -83,7 +90,7 @@ export async function GET(request: NextRequest) {
   if (refreshToken) {
     response.cookies.set('chatgpt_refresh_token', refreshToken, {
       httpOnly: true,
-      secure: false,
+      secure: isSecure,
       sameSite: 'lax',
       maxAge: 60 * 60 * 24 * 30,
       path: '/',
@@ -91,7 +98,7 @@ export async function GET(request: NextRequest) {
   }
   response.cookies.set('chatgpt_account_id', accountId, {
     httpOnly: true,
-    secure: false,
+    secure: isSecure,
     sameSite: 'lax',
     maxAge: 60 * 60 * 24 * 7,
     path: '/',
@@ -99,7 +106,7 @@ export async function GET(request: NextRequest) {
   // Non-httpOnly flag so client knows it's signed in
   response.cookies.set('chatgpt_signed_in', '1', {
     httpOnly: false,
-    secure: false,
+    secure: isSecure,
     sameSite: 'lax',
     maxAge: 60 * 60 * 24 * 7,
     path: '/',
