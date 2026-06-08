@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 const CODEX_RESPONSES_URL = 'https://chatgpt.com/backend-api/codex/responses';
+const TOKEN_URL = 'https://auth.openai.com/oauth/token';
+const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 
 interface ChatMsg {
   role: string;
@@ -37,6 +39,31 @@ let lastRateLimits: RateLimits | null = null;
 
 export function getLastRateLimits(): RateLimits | null {
   return lastRateLimits;
+}
+
+/**
+ * Refreshes the access token using the stored refresh token.
+ * Returns the new access token, or null if refresh is not possible.
+ */
+async function refreshAccessToken(refreshToken: string): Promise<string | null> {
+  try {
+    const response = await fetch(TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: CLIENT_ID,
+        refresh_token: refreshToken,
+      }).toString(),
+    });
+
+    if (!response.ok) return null;
+
+    const tokens = await response.json();
+    return tokens.access_token || null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -173,12 +200,55 @@ async function callCodexBackend(
   return outputText;
 }
 
+async function callWithRetry(
+  accessToken: string,
+  accountId: string,
+  systemPrompt: string,
+  messages: ChatMsg[],
+  refreshToken?: string
+): Promise<{ text: string; newAccessToken?: string }> {
+  let lastError: Error | null = null;
+  let currentToken = accessToken;
+  let tokenWasRefreshed = false;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const text = await callCodexBackend(currentToken, accountId, systemPrompt, messages);
+      return { text, newAccessToken: tokenWasRefreshed ? currentToken : undefined };
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+
+      // Don't retry on explicit generation failures (content policy, etc.)
+      if (lastError.message.startsWith('Codex generation failed')) {
+        throw lastError;
+      }
+
+      // If we have a refresh token, try refreshing before the next attempt
+      if (refreshToken && attempt === 0) {
+        const newToken = await refreshAccessToken(refreshToken);
+        if (newToken) {
+          currentToken = newToken;
+          tokenWasRefreshed = true;
+          continue; // Retry immediately with fresh token
+        }
+      }
+
+      // Brief backoff before retry
+      if (attempt === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    }
+  }
+  throw lastError!;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { systemPrompt, messages } = await request.json();
 
     const accessToken = request.cookies.get('chatgpt_access_token')?.value;
     const accountId = request.cookies.get('chatgpt_account_id')?.value || '';
+    const refreshToken = request.cookies.get('chatgpt_refresh_token')?.value;
 
     if (!accessToken) {
       return NextResponse.json(
@@ -187,7 +257,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const rawText = await callCodexBackend(accessToken, accountId, systemPrompt, messages);
+    const { text: rawText, newAccessToken } = await callWithRetry(
+      accessToken,
+      accountId,
+      systemPrompt,
+      messages,
+      refreshToken
+    );
 
     // Strip markdown fences and parse JSON
     const jsonText = rawText.replace(/```json|```/g, '').trim();
@@ -204,9 +280,27 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ floorPlan });
+    const res = NextResponse.json({ floorPlan });
+
+    // If the token was refreshed, update the cookie for subsequent requests
+    if (newAccessToken) {
+      res.cookies.set('chatgpt_access_token', newAccessToken, {
+        httpOnly: true,
+        secure: false,
+        sameSite: 'lax',
+        maxAge: 60 * 60 * 24 * 7,
+        path: '/',
+      });
+    }
+
+    return res;
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Generation failed';
-    return NextResponse.json({ error: message }, { status: 500 });
+    const isAuthError =
+      message.includes('sign in') || message.includes('401') || message.includes('403');
+    return NextResponse.json(
+      { error: isAuthError ? 'Your session has expired. Please sign in again.' : message },
+      { status: isAuthError ? 401 : 500 }
+    );
   }
 }

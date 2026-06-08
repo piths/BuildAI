@@ -103,13 +103,28 @@ async function callGenerateApi(
   systemPrompt: string,
   messages: Array<{ role: string; content: unknown }>
 ): Promise<FloorPlan> {
-  const response = await fetch('/api/generate', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ systemPrompt, messages }),
-  });
+  let response: Response;
+  try {
+    response = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ systemPrompt, messages }),
+    });
+  } catch (networkErr) {
+    throw new Error(
+      'Network error — could not reach the server. Check your connection and try again.'
+    );
+  }
 
-  const data = await response.json();
+  let data: { floorPlan?: FloorPlan; error?: string };
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error(
+      'The server response was unreadable. This usually means the connection was dropped. Please try again.'
+    );
+  }
+
   if (!response.ok) {
     throw new Error(data.error || `Request failed (${response.status})`);
   }
