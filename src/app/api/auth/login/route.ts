@@ -1,28 +1,15 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 
 const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'; // Codex CLI client ID
 const AUTH_URL = 'https://auth.openai.com/oauth/authorize';
-
-/**
- * The Codex client ID only accepts http://localhost:1455/auth/callback as a
- * redirect URI. We derive the redirect from the request origin so localhost
- * works during development; on other hosts OpenAI will reject the redirect
- * (set OAUTH_REDIRECT_URI to override if you register your own OAuth client).
- */
-function getRedirectUri(request: NextRequest): string {
-  if (process.env.OAUTH_REDIRECT_URI) return process.env.OAUTH_REDIRECT_URI;
-  return `${request.nextUrl.origin}/auth/callback`;
-}
+const REDIRECT_URI = 'http://localhost:1455/auth/callback';
 
 function base64url(buf: Buffer): string {
   return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-export async function GET(request: NextRequest) {
-  const redirectUri = getRedirectUri(request);
-  const isSecure = redirectUri.startsWith('https://');
-
+export async function GET() {
   // Generate PKCE
   const codeVerifier = base64url(crypto.randomBytes(64));
   const codeChallenge = base64url(crypto.createHash('sha256').update(codeVerifier).digest());
@@ -31,7 +18,7 @@ export async function GET(request: NextRequest) {
   const params = new URLSearchParams({
     response_type: 'code',
     client_id: CLIENT_ID,
-    redirect_uri: redirectUri,
+    redirect_uri: REDIRECT_URI,
     scope: 'openid profile email offline_access',
     code_challenge: codeChallenge,
     code_challenge_method: 'S256',
@@ -46,14 +33,14 @@ export async function GET(request: NextRequest) {
   // Store PKCE verifier + state in httpOnly cookies for the callback
   response.cookies.set('pkce_verifier', codeVerifier, {
     httpOnly: true,
-    secure: isSecure,
+    secure: false,
     sameSite: 'lax',
     maxAge: 600,
     path: '/',
   });
   response.cookies.set('oauth_state', state, {
     httpOnly: true,
-    secure: isSecure,
+    secure: false,
     sameSite: 'lax',
     maxAge: 600,
     path: '/',
