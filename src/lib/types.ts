@@ -152,6 +152,39 @@ export interface Floor {
   floorName: string;
   heightMeters: number;
   rooms: Room[];
+  /** Optional structural layer (columns & beams) — ArchiCAD-style. */
+  columns?: Column[];
+  beams?: Beam[];
+}
+
+export type ColumnShape = 'rectangular' | 'circular';
+
+export interface Column {
+  id: string;
+  /** Centre position in building coordinates (metres). */
+  x: number;
+  y: number;
+  shape: ColumnShape;
+  /** Rectangular: width × depth. Circular: widthMeters is the diameter. */
+  widthMeters: number;
+  depthMeters: number;
+  /** Optional material/label for the schedule. */
+  material?: 'reinforced_concrete' | 'steel' | 'timber';
+  label?: string;
+}
+
+export interface Beam {
+  id: string;
+  /** Endpoints in building coordinates (metres). */
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  /** Section: width (plan) × depth (drop below slab). */
+  widthMeters: number;
+  depthMeters: number;
+  material?: 'reinforced_concrete' | 'steel' | 'timber';
+  label?: string;
 }
 
 export type Orientation = 'N' | 'NE' | 'E' | 'SE' | 'S' | 'SW' | 'W' | 'NW';

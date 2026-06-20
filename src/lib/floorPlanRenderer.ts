@@ -9,6 +9,8 @@ interface RenderOptions {
   selectedRoom: string | null;
   selectedFurniture?: { roomIndex: number; furnitureIndex: number } | null;
   selectedOpening?: SelectedOpening | null;
+  selectedColumnId?: string | null;
+  selectedBeamId?: string | null;
 }
 
 export function renderFloorPlan(
@@ -18,7 +20,7 @@ export function renderFloorPlan(
   canvasHeight: number,
   options: RenderOptions
 ) {
-  const { scale, offsetX, offsetY, hoveredRoom, selectedRoom, selectedFurniture, selectedOpening } = options;
+  const { scale, offsetX, offsetY, hoveredRoom, selectedRoom, selectedFurniture, selectedOpening, selectedColumnId, selectedBeamId } = options;
   const s = scale;
 
   // Clear canvas
@@ -49,6 +51,18 @@ export function renderFloorPlan(
   // Draw dimensions
   for (const room of floor.rooms) {
     drawDimensions(ctx, room, s);
+  }
+
+  // Draw structural layer (beams under columns)
+  if (floor.beams) {
+    for (const beam of floor.beams) {
+      drawBeam(ctx, beam, s, beam.id === selectedBeamId);
+    }
+  }
+  if (floor.columns) {
+    for (const col of floor.columns) {
+      drawColumn(ctx, col, s, col.id === selectedColumnId);
+    }
   }
 
   // Draw selection handles for selected furniture
@@ -1304,4 +1318,140 @@ export function getOpeningHandleAtPosition(
     if (worldY >= baseY && worldY <= baseY + w) return 'body';
   }
   return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Structural layer — columns & beams
+// ─────────────────────────────────────────────────────────────────────────────
+
+const COLUMN_FILL = 'rgba(245, 158, 11, 0.85)'; // amber
+const COLUMN_STROKE = '#b45309';
+const BEAM_FILL = 'rgba(124, 58, 237, 0.30)'; // violet, semi-transparent
+const BEAM_STROKE = 'rgba(167, 139, 250, 0.9)';
+const SELECT = '#00d4ff';
+
+function drawColumn(
+  ctx: CanvasRenderingContext2D,
+  col: { x: number; y: number; shape: string; widthMeters: number; depthMeters: number },
+  scale: number,
+  selected: boolean
+) {
+  ctx.save();
+  const cx = col.x * scale;
+  const cy = col.y * scale;
+  ctx.fillStyle = COLUMN_FILL;
+  ctx.strokeStyle = selected ? SELECT : COLUMN_STROKE;
+  ctx.lineWidth = selected ? 2.5 : 1.5;
+
+  if (col.shape === 'circular') {
+    const r = (col.widthMeters / 2) * scale;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  } else {
+    const w = col.widthMeters * scale;
+    const d = col.depthMeters * scale;
+    ctx.fillRect(cx - w / 2, cy - d / 2, w, d);
+    ctx.strokeRect(cx - w / 2, cy - d / 2, w, d);
+  }
+
+  // Cross mark (centroid) — reads as a column symbol
+  ctx.strokeStyle = selected ? SELECT : COLUMN_STROKE;
+  ctx.lineWidth = 1;
+  const m = Math.max(4, Math.min(col.widthMeters, col.depthMeters) * scale * 0.3);
+  ctx.beginPath();
+  ctx.moveTo(cx - m, cy);
+  ctx.lineTo(cx + m, cy);
+  ctx.moveTo(cx, cy - m);
+  ctx.lineTo(cx, cy + m);
+  ctx.stroke();
+
+  if (selected) {
+    ctx.setLineDash([4, 3]);
+    ctx.strokeStyle = SELECT;
+    const r = Math.max(col.widthMeters, col.depthMeters) * scale * 0.5 + 6;
+    ctx.strokeRect(cx - r, cy - r, r * 2, r * 2);
+    ctx.setLineDash([]);
+  }
+  ctx.restore();
+}
+
+function drawBeam(
+  ctx: CanvasRenderingContext2D,
+  beam: { x1: number; y1: number; x2: number; y2: number; widthMeters: number },
+  scale: number,
+  selected: boolean
+) {
+  ctx.save();
+  const x1 = beam.x1 * scale;
+  const y1 = beam.y1 * scale;
+  const x2 = beam.x2 * scale;
+  const y2 = beam.y2 * scale;
+  const w = Math.max(beam.widthMeters * scale, 4);
+
+  ctx.strokeStyle = BEAM_FILL;
+  ctx.lineWidth = w;
+  ctx.lineCap = 'butt';
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+
+  // Centreline (dashed) to read as a beam over
+  ctx.strokeStyle = selected ? SELECT : BEAM_STROKE;
+  ctx.lineWidth = selected ? 2 : 1;
+  ctx.setLineDash([6, 4]);
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+/** Returns the id of the column at the given world position, or null. */
+export function getColumnAtPosition(floor: Floor, worldX: number, worldY: number, scale: number): string | null {
+  const cols = floor.columns || [];
+  for (let i = cols.length - 1; i >= 0; i--) {
+    const c = cols[i];
+    const cx = c.x * scale;
+    const cy = c.y * scale;
+    if (c.shape === 'circular') {
+      const r = (c.widthMeters / 2) * scale + 3;
+      if ((worldX - cx) ** 2 + (worldY - cy) ** 2 <= r * r) return c.id;
+    } else {
+      const w = c.widthMeters * scale;
+      const d = c.depthMeters * scale;
+      if (worldX >= cx - w / 2 - 3 && worldX <= cx + w / 2 + 3 && worldY >= cy - d / 2 - 3 && worldY <= cy + d / 2 + 3) {
+        return c.id;
+      }
+    }
+  }
+  return null;
+}
+
+/** Returns the id of the beam near the given world position, or null. */
+export function getBeamAtPosition(floor: Floor, worldX: number, worldY: number, scale: number): string | null {
+  const beams = floor.beams || [];
+  for (let i = beams.length - 1; i >= 0; i--) {
+    const b = beams[i];
+    const x1 = b.x1 * scale;
+    const y1 = b.y1 * scale;
+    const x2 = b.x2 * scale;
+    const y2 = b.y2 * scale;
+    const tol = Math.max(b.widthMeters * scale, 8) / 2 + 3;
+    if (distToSegment(worldX, worldY, x1, y1, x2, y2) <= tol) return b.id;
+  }
+  return null;
+}
+
+function distToSegment(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.hypot(px - x1, py - y1);
+  let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
 }

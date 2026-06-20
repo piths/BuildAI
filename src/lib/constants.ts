@@ -163,3 +163,186 @@ export const DEFAULT_EXTERNAL_WALL_THICKNESS = 0.2;
 export const DEFAULT_INTERNAL_WALL_THICKNESS = 0.15;
 export const DEFAULT_FOUNDATION_DEPTH = 1.0;
 export const DEFAULT_FOUNDATION_WIDTH = 0.6;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Professional BOQ engine rates (combined material + labour, KES, June 2026).
+// Base rates are for Central Kenya (Murang'a/Nyeri/Kirinyaga). A regional
+// multiplier is applied by the engine.
+// ─────────────────────────────────────────────────────────────────────────────
+export const BOQ_RATES = {
+  // 1. Substructure — site & excavation
+  clear_site_per_m2: 50,
+  setting_out_item: 15000,
+  site_storage_item: 20000,
+  excavation_per_m3: 600,
+  cart_away_per_m3: 400,
+  level_compact_per_m2: 100,
+  // Concrete & steel
+  blinding_per_m3: 14000,
+  concrete_class20_per_m3: 20000,
+  concrete_class25_per_m3: 22000,
+  formwork_per_m2: 500,
+  rebar_y12_per_kg: 120,
+  rebar_r8_per_kg: 130,
+  binding_wire_per_kg: 180,
+  brc_a142_per_m2: 450,
+  // Foundation walling & floor
+  stone_200_per_pc: 65,
+  block_200_per_pc: 80,
+  block_150_per_pc: 60,
+  cement_per_bag: 750,
+  building_sand_per_tonne: 3000,
+  river_sand_per_tonne: 2500,
+  dpc_per_m2: 300,
+  hardcore_per_m3: 1800,
+  murram_per_m3: 1200,
+  dpm_per_m2: 250,
+  anti_termite_per_m2: 150,
+  curing_per_m2: 50,
+
+  // 2. Superstructure walling
+  scaffolding_item: 15000,
+
+  // 3. Roofing — timber
+  wallplate_100x50_per_m: 180,
+  rafter_100x50_per_m: 180,
+  purlin_50x75_per_m: 120,
+  ridgeboard_150x50_per_m: 250,
+  ceiling_joist_100x50_per_m: 180,
+  strut_50x50_per_m: 80,
+  timber_treatment_small_item: 8000,
+  timber_treatment_large_item: 15000,
+  timber_nails_per_kg: 200,
+  // Roof covering
+  iron_sheet_g28_per_pc: 1200,
+  iron_sheet_g30_per_pc: 900,
+  ridge_capping_per_m: 650,
+  roofing_screws_per_pc: 5,
+  gutter_per_m: 450,
+  downpipe_per_m: 350,
+  fascia_per_m: 300,
+  barge_per_m: 280,
+
+  // 4. Doors & windows
+  door_steel_900: 18000,
+  door_timber_panel_800: 12000,
+  door_timber_flush_800: 8000,
+  door_timber_flush_700: 7000,
+  door_ironmongery_item: 3000,
+  window_sliding_1200x1200: 12000,
+  window_sliding_1000x1200: 10000,
+  window_sliding_1000x1000: 9000,
+  window_louvre_600x600: 5000,
+  window_sill_per_m: 800,
+
+  // 5. Finishes
+  plaster_external_face_per_m2: 450,
+  plaster_internal_per_m2: 380,
+  wall_tiles_per_m2: 1500,
+  tile_adhesive_per_bag: 900,
+  grout_wall_per_kg: 350,
+  grout_floor_per_kg: 300,
+  screed_per_m2: 300,
+  floor_tiles_per_m2: 1200,
+  nonslip_tiles_per_m2: 1400,
+  skirting_per_m: 250,
+  ceiling_board_per_m2: 650,
+  brandering_per_m: 50,
+  ceiling_nails_per_kg: 200,
+  cornice_per_m: 120,
+  paint_internal_per_m2: 250,
+  paint_external_per_m2: 300,
+  paint_ceiling_per_m2: 200,
+  paint_door_each: 1500,
+  paint_timber_item: 5000,
+
+  // 6. Plumbing & drainage
+  ppr_20_per_m: 150,
+  ppr_15_per_m: 120,
+  gate_valve_20: 800,
+  gate_valve_15: 600,
+  ppr_fittings_item: 4000,
+  pipe_trench_per_m: 200,
+  wc_suite: 15000,
+  wash_basin: 8000,
+  kitchen_sink: 12000,
+  shower_set: 8000,
+  shower_drain: 3000,
+  bathtub: 25000,
+  mirror: 2500,
+  bath_accessories: 2000,
+  pvc_110_per_m: 800,
+  pvc_50_per_m: 350,
+  inspection_chamber_each: 8000,
+  ptrap_each: 500,
+  drainage_fittings_item: 3000,
+  drainage_trench_per_m: 300,
+  water_tank_10000: 42000,
+  tank_stand: 15000,
+  biodigester: 75000,
+  soak_pit: 12000,
+
+  // 7. Electrical
+  kplc_application_item: 15000,
+  consumer_unit: 8000,
+  main_switch_60a: 3000,
+  earth_rod: 2500,
+  light_point: 800,
+  socket_point: 650,
+  switch_each: 350,
+  cable_2_5_per_m: 120,
+  cable_1_5_per_m: 80,
+  conduit_per_m: 45,
+  security_light_each: 3000,
+  tv_point_item: 3000,
+  epra_cert_item: 5000,
+
+  // 8. External works
+  veranda_per_m2: 3500,
+  external_steps_item: 8000,
+  apron_per_m2: 800,
+  clothesline_set: 3000,
+  external_tap: 2000,
+  landscaping_item: 10000,
+  driveway_per_m2: 500,
+
+  // 9. Preliminaries & provisional sums
+  water_construction_per_month: 3000,
+  temp_electricity_item: 10000,
+  foreman_per_month: 20000,
+  county_approval_item: 15000,
+  nca_registration_item: 5000,
+  structural_cert_item: 25000,
+  architect_item: 30000,
+  car_insurance_item: 15000,
+  cleanup_item: 5000,
+  misc_item: 20000,
+};
+
+export type BoqRateKey = keyof typeof BOQ_RATES;
+
+// Steel unit weights (kg per metre).
+export const STEEL_WEIGHT = { Y12: 0.888, Y16: 1.578, R8: 0.395 };
+
+// Regional cost multipliers applied to all BOQ rates.
+export const REGION_MULTIPLIERS: Record<string, number> = {
+  nairobi: 1.15,
+  central: 1.0,
+  coast: 1.1,
+  western: 1.05,
+  rift_valley: 1.0,
+  nyanza: 1.05,
+  eastern: 0.95,
+  north_eastern: 1.25,
+};
+
+export const REGION_LABELS: Record<string, string> = {
+  nairobi: 'Nairobi',
+  central: 'Central (Murang\u2019a, Nyeri)',
+  coast: 'Coast',
+  western: 'Western',
+  rift_valley: 'Rift Valley',
+  nyanza: 'Nyanza',
+  eastern: 'Eastern',
+  north_eastern: 'North Eastern',
+};

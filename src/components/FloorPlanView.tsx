@@ -1,7 +1,8 @@
 'use client';
 
 import { useRef, useEffect, useState, useCallback } from 'react';
-import { FloorPlan, Room, FurnitureType, Opening } from '@/lib/types';
+import dynamic from 'next/dynamic';
+import { FloorPlan, Room, FurnitureType, Opening, Column, Beam, ColumnShape } from '@/lib/types';
 import { SCALE_FACTOR } from '@/lib/constants';
 import { GenProvider } from '@/lib/ai';
 import {
@@ -11,16 +12,19 @@ import {
   getFurnitureHandleAtPosition,
   getOpeningAtPosition,
   getOpeningHandleAtPosition,
+  getColumnAtPosition,
+  getBeamAtPosition,
   HandleType,
   SelectedOpening,
   OpeningHandleType,
 } from '@/lib/floorPlanRenderer';
 import Sidebar from './Sidebar';
 import ChatPanel from './ChatPanel';
-import AnalysisPanel from './AnalysisPanel';
+
+// Three.js / jsPDF heavy pieces load only when actually used.
+const ColumnInspector = dynamic(() => import('./ColumnInspector'), { ssr: false });
+const AnalysisPanel = dynamic(() => import('./AnalysisPanel'), { ssr: false });
 import LanguageToggle from './LanguageToggle';
-import { generatePdfReport } from '@/lib/pdfGenerator';
-import { captureBuildingImage } from '@/lib/sceneCapture';
 import { normalizeFloorPlan, planNeedsNormalizing } from '@/lib/planNormalizer';
 
 interface FloorPlanViewProps {
@@ -34,7 +38,7 @@ interface FloorPlanViewProps {
 
 type SelectedFurniture = { roomIndex: number; furnitureIndex: number } | null;
 
-type EditTab = 'furniture' | 'openings';
+type EditTab = 'furniture' | 'openings' | 'walls' | 'structure';
 
 type DragMode =
   | { kind: 'pan' }
@@ -43,6 +47,7 @@ type DragMode =
   | { kind: 'rotate'; startAngle: number; startRotation: number }
   | { kind: 'move-opening'; startMouse: { x: number; y: number }; startPos: number }
   | { kind: 'resize-opening'; handle: 'start' | 'end'; startMouse: { x: number; y: number }; startPos: number; startWidth: number }
+  | { kind: 'move-column'; startMouse: { x: number; y: number }; startPos: { x: number; y: number } }
   | null;
 
 const FURNITURE_PALETTE: { category: string; items: { type: FurnitureType; label: string; w: number; d: number }[] }[] = [
@@ -123,6 +128,13 @@ export default function FloorPlanView({
   const [editMode, setEditMode] = useState(false);
   const [editTab, setEditTab] = useState<EditTab>('furniture');
   const [showAddPanel, setShowAddPanel] = useState(false);
+
+  // Structural editing state
+  const [structureTool, setStructureTool] = useState<'select' | 'add-column' | 'add-beam'>('select');
+  const [selectedColumnId, setSelectedColumnId] = useState<string | null>(null);
+  const [selectedBeamId, setSelectedBeamId] = useState<string | null>(null);
+  const [beamStartColumnId, setBeamStartColumnId] = useState<string | null>(null);
+  const [inspectColumnId, setInspectColumnId] = useState<string | null>(null);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; room: Room } | null>(null);
   const [cursor, setCursor] = useState('grab');
 
@@ -133,9 +145,10 @@ export default function FloorPlanView({
   // Analysis suite (BOQ, cost, compliance, timeline, green, climate, sun)
   const [showAnalysis, setShowAnalysis] = useState(false);
 
-  const handleExportPdf = () => {
+  const handleExportPdf = async () => {
     const canvas = canvasRef.current;
     const image = canvas ? canvas.toDataURL('image/png') : null;
+    const { generatePdfReport } = await import('@/lib/pdfGenerator');
     generatePdfReport(floorPlan, { floorPlanImage: image });
   };
 
@@ -164,9 +177,16 @@ export default function FloorPlanView({
     if (!ctx) return;
 
     const rect = canvas.getBoundingClientRect();
-    canvas.width = rect.width * window.devicePixelRatio;
-    canvas.height = rect.height * window.devicePixelRatio;
-    ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.round(rect.width * dpr);
+    const h = Math.round(rect.height * dpr);
+    // Only reallocate the backing store when the size actually changes — setting
+    // canvas.width every frame clears and reallocates, which is costly on pan/hover.
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     renderFloorPlan(ctx, floor, rect.width, rect.height, {
       scale,
@@ -176,8 +196,10 @@ export default function FloorPlanView({
       selectedRoom: selectedRoom?.id || null,
       selectedFurniture: editMode ? selectedFurniture : null,
       selectedOpening: editMode ? selectedOpening : null,
+      selectedColumnId: editMode ? selectedColumnId : null,
+      selectedBeamId: editMode ? selectedBeamId : null,
     });
-  }, [floor, scale, offset, hoveredRoom, selectedRoom, selectedFurniture, selectedOpening, editMode]);
+  }, [floor, scale, offset, hoveredRoom, selectedRoom, selectedFurniture, selectedOpening, selectedColumnId, selectedBeamId, editMode]);
 
   useEffect(() => {
     draw();
@@ -195,6 +217,10 @@ export default function FloorPlanView({
       setSelectedFurniture(null);
       setSelectedOpening(null);
       setShowAddPanel(false);
+      setSelectedColumnId(null);
+      setSelectedBeamId(null);
+      setBeamStartColumnId(null);
+      setStructureTool('select');
     }
   }, [editMode]);
 
@@ -283,6 +309,172 @@ export default function FloorPlanView({
     setSelectedOpening({ roomIndex, wallSide, openingIndex: wall.openings.length - 1 });
   };
 
+  // ── Walls & structural helpers ───────────────────────────────────────────
+  const genId = (p: string) => `${p}_${Math.random().toString(36).slice(2, 9)}`;
+
+  const buildingBounds = () => {
+    const rooms = floor.rooms;
+    return {
+      minX: Math.min(...rooms.map((r) => r.x)),
+      maxX: Math.max(...rooms.map((r) => r.x + r.widthMeters)),
+      minY: Math.min(...rooms.map((r) => r.y)),
+      maxY: Math.max(...rooms.map((r) => r.y + r.depthMeters)),
+    };
+  };
+
+  const toggleWall = (roomIndex: number, side: 'north' | 'south' | 'east' | 'west') => {
+    const newPlan: FloorPlan = JSON.parse(JSON.stringify(floorPlan));
+    const wall = newPlan.floors[currentFloor].rooms[roomIndex].walls[side];
+    wall.hasWall = !wall.hasWall;
+    if (!wall.hasWall) wall.openings = [];
+    else if (!wall.openings) wall.openings = [];
+    onFloorPlanUpdate(newPlan);
+  };
+
+  const addColumnAt = (xM: number, yM: number) => {
+    const newPlan: FloorPlan = JSON.parse(JSON.stringify(floorPlan));
+    const f = newPlan.floors[currentFloor];
+    if (!f.columns) f.columns = [];
+    const id = genId('col');
+    f.columns.push({
+      id,
+      x: Math.round(xM * 20) / 20,
+      y: Math.round(yM * 20) / 20,
+      shape: 'rectangular',
+      widthMeters: 0.3,
+      depthMeters: 0.3,
+      material: 'reinforced_concrete',
+    });
+    onFloorPlanUpdate(newPlan);
+    setSelectedColumnId(id);
+    setSelectedBeamId(null);
+  };
+
+  const updateColumn = (id: string, changes: Partial<Column>) => {
+    const newPlan: FloorPlan = JSON.parse(JSON.stringify(floorPlan));
+    const f = newPlan.floors[currentFloor];
+    const col = (f.columns || []).find((c) => c.id === id);
+    if (col) Object.assign(col, changes);
+    onFloorPlanUpdate(newPlan);
+  };
+
+  const deleteColumn = (id: string) => {
+    const newPlan: FloorPlan = JSON.parse(JSON.stringify(floorPlan));
+    const f = newPlan.floors[currentFloor];
+    f.columns = (f.columns || []).filter((c) => c.id !== id);
+    // Remove beams attached to this column position
+    onFloorPlanUpdate(newPlan);
+    setSelectedColumnId(null);
+  };
+
+  const addBeamBetweenColumns = (aId: string, bId: string) => {
+    const f = floor;
+    const a = (f.columns || []).find((c) => c.id === aId);
+    const b = (f.columns || []).find((c) => c.id === bId);
+    if (!a || !b) return;
+    const newPlan: FloorPlan = JSON.parse(JSON.stringify(floorPlan));
+    const nf = newPlan.floors[currentFloor];
+    if (!nf.beams) nf.beams = [];
+    const id = genId('beam');
+    nf.beams.push({
+      id,
+      x1: a.x,
+      y1: a.y,
+      x2: b.x,
+      y2: b.y,
+      widthMeters: 0.2,
+      depthMeters: 0.4,
+      material: 'reinforced_concrete',
+    });
+    onFloorPlanUpdate(newPlan);
+    setSelectedBeamId(id);
+  };
+
+  const deleteBeam = (id: string) => {
+    const newPlan: FloorPlan = JSON.parse(JSON.stringify(floorPlan));
+    const f = newPlan.floors[currentFloor];
+    f.beams = (f.beams || []).filter((b) => b.id !== id);
+    onFloorPlanUpdate(newPlan);
+    setSelectedBeamId(null);
+  };
+
+  // Auto-generate a column grid at room corners + connecting beams.
+  const autoColumnGrid = () => {
+    const b = buildingBounds();
+    const xs = new Set<number>();
+    const ys = new Set<number>();
+    for (const r of floor.rooms) {
+      xs.add(Math.round(r.x * 20) / 20);
+      xs.add(Math.round((r.x + r.widthMeters) * 20) / 20);
+      ys.add(Math.round(r.y * 20) / 20);
+      ys.add(Math.round((r.y + r.depthMeters) * 20) / 20);
+    }
+    const xArr = [...xs].sort((a, c) => a - c);
+    const yArr = [...ys].sort((a, c) => a - c);
+
+    const newPlan: FloorPlan = JSON.parse(JSON.stringify(floorPlan));
+    const f = newPlan.floors[currentFloor];
+    const columns: Column[] = [];
+    const beams: Beam[] = [];
+    const grid: Record<string, string> = {};
+
+    const inset = 0.1;
+    for (const gx of xArr) {
+      for (const gy of yArr) {
+        // Nudge perimeter columns inward so they sit inside the wall line.
+        const x = gx === b.minX ? gx + inset : gx === b.maxX ? gx - inset : gx;
+        const y = gy === b.minY ? gy + inset : gy === b.maxY ? gy - inset : gy;
+        const id = genId('col');
+        grid[`${gx},${gy}`] = id;
+        columns.push({ id, x, y, shape: 'rectangular', widthMeters: 0.3, depthMeters: 0.3, material: 'reinforced_concrete' });
+      }
+    }
+    // Beams along grid lines between adjacent columns.
+    for (let i = 0; i < xArr.length; i++) {
+      for (let j = 0; j < yArr.length; j++) {
+        const here = grid[`${xArr[i]},${yArr[j]}`];
+        if (i + 1 < xArr.length) {
+          const right = grid[`${xArr[i + 1]},${yArr[j]}`];
+          if (here && right) beams.push({ id: genId('beam'), x1: xArr[i], y1: yArr[j], x2: xArr[i + 1], y2: yArr[j], widthMeters: 0.2, depthMeters: 0.4, material: 'reinforced_concrete' });
+        }
+        if (j + 1 < yArr.length) {
+          const down = grid[`${xArr[i]},${yArr[j + 1]}`];
+          if (here && down) beams.push({ id: genId('beam'), x1: xArr[i], y1: yArr[j], x2: xArr[i], y2: yArr[j + 1], widthMeters: 0.2, depthMeters: 0.4, material: 'reinforced_concrete' });
+        }
+      }
+    }
+    f.columns = columns;
+    f.beams = beams;
+    onFloorPlanUpdate(newPlan);
+  };
+
+  // Find the nearest room wall side to a world point (for the Walls tab).
+  const wallSideAtPosition = (xM: number, yM: number): { roomIndex: number; side: 'north' | 'south' | 'east' | 'west' } | null => {
+    const tol = 0.35; // metres
+    let bestRoom = -1;
+    let bestSide: 'north' | 'south' | 'east' | 'west' = 'north';
+    let bestDist = Infinity;
+    for (let ri = 0; ri < floor.rooms.length; ri++) {
+      const r = floor.rooms[ri];
+      const within = xM >= r.x - tol && xM <= r.x + r.widthMeters + tol && yM >= r.y - tol && yM <= r.y + r.depthMeters + tol;
+      if (!within) continue;
+      const edges: { side: 'north' | 'south' | 'east' | 'west'; dist: number; along: boolean }[] = [
+        { side: 'north', dist: Math.abs(yM - r.y), along: xM >= r.x && xM <= r.x + r.widthMeters },
+        { side: 'south', dist: Math.abs(yM - (r.y + r.depthMeters)), along: xM >= r.x && xM <= r.x + r.widthMeters },
+        { side: 'west', dist: Math.abs(xM - r.x), along: yM >= r.y && yM <= r.y + r.depthMeters },
+        { side: 'east', dist: Math.abs(xM - (r.x + r.widthMeters)), along: yM >= r.y && yM <= r.y + r.depthMeters },
+      ];
+      for (const e of edges) {
+        if (e.along && e.dist <= tol && e.dist < bestDist) {
+          bestDist = e.dist;
+          bestRoom = ri;
+          bestSide = e.side;
+        }
+      }
+    }
+    return bestRoom >= 0 ? { roomIndex: bestRoom, side: bestSide } : null;
+  };
+
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();
     const delta = e.deltaY > 0 ? -3 : 3;
@@ -295,6 +487,61 @@ export default function FloorPlanView({
     movedRef.current = false;
 
     if (editMode) {
+      // --- Walls tab: click a wall edge to toggle it ---
+      if (editTab === 'walls') {
+        const hit = wallSideAtPosition(x / scale, y / scale);
+        if (hit) {
+          toggleWall(hit.roomIndex, hit.side);
+          return;
+        }
+        dragRef.current = { kind: 'pan' };
+        panStartRef.current = { x: e.clientX - offset.x, y: e.clientY - offset.y };
+        return;
+      }
+
+      // --- Structure tab: columns & beams ---
+      if (editTab === 'structure') {
+        const colId = getColumnAtPosition(floor, x, y, scale);
+        if (structureTool === 'add-column') {
+          if (colId) {
+            setSelectedColumnId(colId);
+            setSelectedBeamId(null);
+          } else {
+            addColumnAt(x / scale, y / scale);
+          }
+          return;
+        }
+        if (structureTool === 'add-beam') {
+          if (colId) {
+            if (!beamStartColumnId) setBeamStartColumnId(colId);
+            else if (beamStartColumnId !== colId) {
+              addBeamBetweenColumns(beamStartColumnId, colId);
+              setBeamStartColumnId(null);
+            } else setBeamStartColumnId(null);
+          }
+          return;
+        }
+        // select tool
+        if (colId) {
+          setSelectedColumnId(colId);
+          setSelectedBeamId(null);
+          const col = (floor.columns || []).find((c) => c.id === colId)!;
+          dragRef.current = { kind: 'move-column', startMouse: { x, y }, startPos: { x: col.x, y: col.y } };
+          return;
+        }
+        const beamId = getBeamAtPosition(floor, x, y, scale);
+        if (beamId) {
+          setSelectedBeamId(beamId);
+          setSelectedColumnId(null);
+          return;
+        }
+        setSelectedColumnId(null);
+        setSelectedBeamId(null);
+        dragRef.current = { kind: 'pan' };
+        panStartRef.current = { x: e.clientX - offset.x, y: e.clientY - offset.y };
+        return;
+      }
+
       // --- Opening interactions (when in openings tab or any tab) ---
       if (selectedOpening) {
         const handle = getOpeningHandleAtPosition(floor, selectedOpening, x, y, scale);
@@ -445,6 +692,16 @@ export default function FloorPlanView({
         updateOpening(selectedOpening, {
           positionFromLeft: Math.round(newPos * 20) / 20,
           widthMeters: Math.round(newWidth * 20) / 20,
+        });
+        return;
+      }
+
+      if (drag.kind === 'move-column' && selectedColumnId) {
+        const dxM = (x - drag.startMouse.x) / scale;
+        const dyM = (y - drag.startMouse.y) / scale;
+        updateColumn(selectedColumnId, {
+          x: Math.round((drag.startPos.x + dxM) * 20) / 20,
+          y: Math.round((drag.startPos.y + dyM) * 20) / 20,
         });
         return;
       }
@@ -613,6 +870,7 @@ export default function FloorPlanView({
 
       // Step 1: Seed the video with a render of the ACTUAL building (real layout),
       // so the video is of THIS house — not a generic stock interior.
+      const { captureBuildingImage } = await import('@/lib/sceneCapture');
       let seedImageUrl: string | null = captureBuildingImage(floor, { view: 'dollhouse' });
       let seedIsRender = !!seedImageUrl;
 
@@ -706,13 +964,19 @@ export default function FloorPlanView({
         } else if (selectedOpening) {
           e.preventDefault();
           deleteSelectedOpening();
+        } else if (selectedColumnId) {
+          e.preventDefault();
+          deleteColumn(selectedColumnId);
+        } else if (selectedBeamId) {
+          e.preventDefault();
+          deleteBeam(selectedBeamId);
         }
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editMode, selectedFurniture, selectedOpening, floorPlan, currentFloor]);
+  }, [editMode, selectedFurniture, selectedOpening, selectedColumnId, selectedBeamId, floorPlan, currentFloor]);
 
   const zoomIn = () => setScale((s) => Math.min(100, s + 5));
   const zoomOut = () => setScale((s) => Math.max(15, s - 5));
@@ -721,6 +985,31 @@ export default function FloorPlanView({
     selectedFurniture && floor.rooms[selectedFurniture.roomIndex]
       ? floor.rooms[selectedFurniture.roomIndex].furniture[selectedFurniture.furnitureIndex]
       : null;
+
+  const selectedColumn = (floor.columns || []).find((c) => c.id === selectedColumnId) || null;
+  const selectedBeam = (floor.beams || []).find((b) => b.id === selectedBeamId) || null;
+  const inspectColumn = (floor.columns || []).find((c) => c.id === inspectColumnId) || null;
+
+  const setColumnShape = (id: string, shape: ColumnShape) => {
+    const col = (floor.columns || []).find((c) => c.id === id);
+    if (!col) return;
+    updateColumn(id, shape === 'circular' ? { shape, depthMeters: col.widthMeters } : { shape });
+  };
+  const nudgeColumnSize = (id: string, delta: number) => {
+    const col = (floor.columns || []).find((c) => c.id === id);
+    if (!col) return;
+    const w = Math.max(0.15, Math.min(1.2, Math.round((col.widthMeters + delta) * 20) / 20));
+    updateColumn(id, col.shape === 'circular' ? { widthMeters: w, depthMeters: w } : { widthMeters: w, depthMeters: Math.max(0.15, Math.min(1.2, Math.round((col.depthMeters + delta) * 20) / 20)) });
+  };
+  const nudgeBeamSize = (id: string, key: 'widthMeters' | 'depthMeters', delta: number) => {
+    const beam = (floor.beams || []).find((b) => b.id === id);
+    if (!beam) return;
+    const v = Math.max(0.1, Math.min(1.0, Math.round((beam[key] + delta) * 20) / 20));
+    const newPlan: FloorPlan = JSON.parse(JSON.stringify(floorPlan));
+    const b = (newPlan.floors[currentFloor].beams || []).find((x) => x.id === id);
+    if (b) (b[key] as number) = v;
+    onFloorPlanUpdate(newPlan);
+  };
 
   return (
     <div className="h-screen flex bg-bg-primary">
@@ -768,6 +1057,22 @@ export default function FloorPlanView({
               >
                 Doors & Windows
               </button>
+              <button
+                onClick={() => setEditTab('walls')}
+                className={`px-3 py-1.5 rounded-md text-xs font-body transition-all ${
+                  editTab === 'walls' ? 'bg-accent-primary/20 text-accent-primary' : 'text-text-secondary hover:text-text-primary'
+                }`}
+              >
+                Walls
+              </button>
+              <button
+                onClick={() => setEditTab('structure')}
+                className={`px-3 py-1.5 rounded-md text-xs font-body transition-all ${
+                  editTab === 'structure' ? 'bg-accent-primary/20 text-accent-primary' : 'text-text-secondary hover:text-text-primary'
+                }`}
+              >
+                Structure
+              </button>
             </div>
           )}
         </div>
@@ -795,15 +1100,20 @@ export default function FloorPlanView({
             <p className="text-text-secondary text-[11px] font-body leading-relaxed">
               {editTab === 'furniture'
                 ? 'Click furniture to select. Drag to move, corners to resize, purple handle to rotate. Press Delete to remove.'
-                : 'Click a door or window to select. Drag to reposition, drag handles to resize. Press Delete to remove.'
-              }
+                : editTab === 'openings'
+                ? 'Click a door or window to select. Drag to reposition, drag handles to resize. Press Delete to remove.'
+                : editTab === 'walls'
+                ? 'Click any wall edge to add or remove that wall. Removing a wall opens the rooms to each other.'
+                : 'Place columns and beams. Use the toolbar below: add columns, connect them with beams, or auto-generate a grid. Click a column then "Inspect 3D" to check the junction.'}
             </p>
-            <button
-              onClick={() => setShowAddPanel((v) => !v)}
-              className="mt-1.5 text-accent-primary text-[11px] font-body hover:underline"
-            >
-              {showAddPanel ? '← Hide panel' : `+ Add ${editTab === 'furniture' ? 'furniture' : 'door/window'}…`}
-            </button>
+            {(editTab === 'furniture' || editTab === 'openings') && (
+              <button
+                onClick={() => setShowAddPanel((v) => !v)}
+                className="mt-1.5 text-accent-primary text-[11px] font-body hover:underline"
+              >
+                {showAddPanel ? '← Hide panel' : `+ Add ${editTab === 'furniture' ? 'furniture' : 'door/window'}…`}
+              </button>
+            )}
           </div>
         )}
 
@@ -1002,6 +1312,102 @@ export default function FloorPlanView({
           </div>
         )}
 
+        {/* Structure toolbar */}
+        {editMode && editTab === 'structure' && (
+          <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-20 bg-bg-card/95 backdrop-blur-sm border border-border-custom rounded-xl px-3 py-2.5 shadow-xl max-w-[92vw]">
+            <div className="flex items-center gap-2 flex-wrap justify-center">
+              {([
+                ['select', '↖ Select'],
+                ['add-column', '⬚ Add Column'],
+                ['add-beam', '— Add Beam'],
+              ] as [typeof structureTool, string][]).map(([tool, label]) => (
+                <button
+                  key={tool}
+                  onClick={() => {
+                    setStructureTool(tool);
+                    setBeamStartColumnId(null);
+                  }}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-body transition-all border ${
+                    structureTool === tool
+                      ? 'bg-accent-primary/20 text-accent-primary border-accent-primary/40'
+                      : 'bg-bg-secondary/60 text-text-secondary border-border-custom hover:text-text-primary'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+              <span className="w-px h-5 bg-border-custom" />
+              <button
+                onClick={autoColumnGrid}
+                className="px-3 py-1.5 rounded-lg text-xs font-body bg-accent-secondary/20 text-accent-secondary border border-accent-secondary/40 hover:bg-accent-secondary/30 transition-all"
+              >
+                ⊞ Auto Grid
+              </button>
+              <span className="text-text-secondary/50 text-[10px] font-mono">
+                {floor.columns?.length || 0} cols · {floor.beams?.length || 0} beams
+              </span>
+            </div>
+
+            {structureTool === 'add-beam' && (
+              <p className="text-text-secondary/70 text-[10px] font-body text-center mt-2">
+                {beamStartColumnId ? 'Now click a second column to connect the beam' : 'Click the first column to start a beam'}
+              </p>
+            )}
+
+            {/* Selected column controls */}
+            {structureTool === 'select' && selectedColumn && (
+              <div className="flex items-center gap-2 mt-2.5 pt-2.5 border-t border-border-custom flex-wrap justify-center">
+                <span className="text-accent-primary text-[11px] font-mono">Column</span>
+                <div className="flex gap-0.5 bg-bg-secondary/60 rounded-lg p-0.5">
+                  {(['rectangular', 'circular'] as ColumnShape[]).map((sh) => (
+                    <button
+                      key={sh}
+                      onClick={() => setColumnShape(selectedColumn.id, sh)}
+                      className={`px-2 py-1 rounded text-[11px] font-body ${selectedColumn.shape === sh ? 'bg-accent-primary/20 text-accent-primary' : 'text-text-secondary'}`}
+                    >
+                      {sh === 'rectangular' ? '▭' : '●'}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-1">
+                  <button onClick={() => nudgeColumnSize(selectedColumn.id, -0.05)} className="w-6 h-6 rounded bg-bg-secondary/60 text-text-secondary hover:text-text-primary">−</button>
+                  <span className="text-text-secondary text-[11px] font-mono w-14 text-center">
+                    {selectedColumn.shape === 'circular' ? `Ø${(selectedColumn.widthMeters * 1000).toFixed(0)}` : `${(selectedColumn.widthMeters * 1000).toFixed(0)}×${(selectedColumn.depthMeters * 1000).toFixed(0)}`}
+                  </span>
+                  <button onClick={() => nudgeColumnSize(selectedColumn.id, 0.05)} className="w-6 h-6 rounded bg-bg-secondary/60 text-text-secondary hover:text-text-primary">+</button>
+                </div>
+                <button
+                  onClick={() => setInspectColumnId(selectedColumn.id)}
+                  className="px-2.5 py-1 rounded-lg text-[11px] font-body bg-accent-primary/15 text-accent-primary border border-accent-primary/30 hover:bg-accent-primary/25"
+                >
+                  🏛️ Inspect 3D
+                </button>
+                <button onClick={() => deleteColumn(selectedColumn.id)} className="px-2.5 py-1 rounded-lg text-[11px] font-body text-red-400 hover:text-red-300">Delete</button>
+              </div>
+            )}
+
+            {/* Selected beam controls */}
+            {structureTool === 'select' && selectedBeam && (
+              <div className="flex items-center gap-2 mt-2.5 pt-2.5 border-t border-border-custom flex-wrap justify-center">
+                <span className="text-accent-secondary text-[11px] font-mono">Beam</span>
+                <div className="flex items-center gap-1">
+                  <span className="text-text-secondary/60 text-[10px] font-mono">W</span>
+                  <button onClick={() => nudgeBeamSize(selectedBeam.id, 'widthMeters', -0.05)} className="w-6 h-6 rounded bg-bg-secondary/60 text-text-secondary hover:text-text-primary">−</button>
+                  <span className="text-text-secondary text-[11px] font-mono w-10 text-center">{(selectedBeam.widthMeters * 1000).toFixed(0)}</span>
+                  <button onClick={() => nudgeBeamSize(selectedBeam.id, 'widthMeters', 0.05)} className="w-6 h-6 rounded bg-bg-secondary/60 text-text-secondary hover:text-text-primary">+</button>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-text-secondary/60 text-[10px] font-mono">D</span>
+                  <button onClick={() => nudgeBeamSize(selectedBeam.id, 'depthMeters', -0.05)} className="w-6 h-6 rounded bg-bg-secondary/60 text-text-secondary hover:text-text-primary">−</button>
+                  <span className="text-text-secondary text-[11px] font-mono w-10 text-center">{(selectedBeam.depthMeters * 1000).toFixed(0)}</span>
+                  <button onClick={() => nudgeBeamSize(selectedBeam.id, 'depthMeters', 0.05)} className="w-6 h-6 rounded bg-bg-secondary/60 text-text-secondary hover:text-text-primary">+</button>
+                </div>
+                <button onClick={() => deleteBeam(selectedBeam.id)} className="px-2.5 py-1 rounded-lg text-[11px] font-body text-red-400 hover:text-red-300">Delete</button>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Tooltip */}
         {tooltip && !editMode && (
           <div
@@ -1066,6 +1472,16 @@ export default function FloorPlanView({
           onClose={() => setShowAnalysis(false)}
           onUpdatePlan={onFloorPlanUpdate}
           onExportPdf={handleExportPdf}
+        />
+      )}
+
+      {/* Column inspector (3D orbit) */}
+      {inspectColumn && (
+        <ColumnInspector
+          floor={floor}
+          column={inspectColumn}
+          onUpdate={(c) => updateColumn(c.id, c)}
+          onClose={() => setInspectColumnId(null)}
         />
       )}
     </div>

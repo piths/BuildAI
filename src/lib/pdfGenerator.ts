@@ -1,7 +1,7 @@
 import { jsPDF } from 'jspdf';
 import { FloorPlan } from './types';
-import { calculateBOQ } from './boqCalculator';
-import { estimateCost, formatKES } from './costEstimator';
+import { generateBOQ } from './boqEngine';
+import { formatKES } from './costEstimator';
 import { checkCompliance } from './complianceChecker';
 import { generateTimeline } from './timelineGenerator';
 import { calculateGreenScore } from './greenScoring';
@@ -26,8 +26,8 @@ interface PdfOptions {
 
 export function generatePdfReport(plan: FloorPlan, options: PdfOptions = {}): void {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
-  const boq = calculateBOQ(plan);
-  const cost = estimateCost(plan);
+  const report = generateBOQ(plan, { region: undefined });
+  const summary = report.grandSummary;
   const compliance = checkCompliance(plan, plan.climateZone);
   const timeline = generateTimeline(plan);
   const green = calculateGreenScore(plan);
@@ -87,7 +87,7 @@ export function generatePdfReport(plan: FloorPlan, options: PdfOptions = {}): vo
     `Total Area:  ${plan.totalAreaSqMeters.toFixed(1)} m²`,
     `Floors:  ${plan.floors.length}`,
     `Rooms:  ${totalRooms}`,
-    `Estimated Cost:  ${formatKES(cost.total)}`,
+    `Estimated Cost:  ${formatKES(summary.grandTotal)}`,
     `Date:  ${today}`,
   ];
   stats.forEach((s, i) => doc.text(s, PAGE_W / 2, 124 + i * 8, { align: 'center' }));
@@ -181,7 +181,7 @@ export function generatePdfReport(plan: FloorPlan, options: PdfOptions = {}): vo
     { title: 'Rate', w: 26 },
     { title: 'Amount', w: 30 },
   ];
-  for (const trade of boq.trades) {
+  for (const el of report.elements) {
     if (y > PAGE_H - 40) {
       footer();
       doc.addPage();
@@ -190,29 +190,42 @@ export function generatePdfReport(plan: FloorPlan, options: PdfOptions = {}): vo
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9.5);
     doc.setTextColor(...CYAN);
-    doc.text(trade.name.toUpperCase(), MARGIN, y);
+    doc.text(`ELEMENT ${el.elementNumber}: ${el.elementName}`, MARGIN, y);
     y += 4;
     doc.setFont('helvetica', 'normal');
-    y = tableHeader(doc, boqCols, y);
-    for (const it of trade.items) {
-      y = tableRow(
-        doc,
-        boqCols,
-        [it.description, formatNum(it.quantity), it.unit, formatNum(it.rate), formatNum(it.amount)],
-        y,
-        8,
-      );
-      if (y > PAGE_H - 24) {
+    for (const ss of el.subSections) {
+      if (y > PAGE_H - 28) {
         footer();
         doc.addPage();
         y = sectionTitle('Bill of Quantities (cont.)', MARGIN);
-        y = tableHeader(doc, boqCols, y);
+      }
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.setTextColor(...GRAY);
+      doc.text(`${ss.code}  ${ss.name}`, MARGIN, y);
+      doc.setFont('helvetica', 'normal');
+      y += 3.5;
+      y = tableHeader(doc, boqCols, y);
+      for (const it of ss.items) {
+        y = tableRow(
+          doc,
+          boqCols,
+          [`${it.itemCode}  ${it.description}`, formatNum(it.quantity), it.unit, formatNum(it.rate), formatNum(it.amount)],
+          y,
+          7.5,
+        );
+        if (y > PAGE_H - 24) {
+          footer();
+          doc.addPage();
+          y = sectionTitle('Bill of Quantities (cont.)', MARGIN);
+          y = tableHeader(doc, boqCols, y);
+        }
       }
     }
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(...NAVY);
     doc.setFontSize(8.5);
-    doc.text(`Subtotal: ${formatKES(trade.subtotal)}`, PAGE_W - MARGIN, y + 1, { align: 'right' });
+    doc.text(`Element ${el.elementNumber} subtotal: ${formatKES(el.subtotal)}`, PAGE_W - MARGIN, y + 1, { align: 'right' });
     doc.setFont('helvetica', 'normal');
     y += 7;
   }
@@ -228,9 +241,9 @@ export function generatePdfReport(plan: FloorPlan, options: PdfOptions = {}): vo
   doc.setFontSize(9);
   doc.setTextColor(...NAVY);
   const totalsLines = [
-    ['Subtotal', formatKES(boq.subtotal)],
-    ['Contingency (10%)', formatKES(boq.contingency)],
-    ['VAT (16%)', formatKES(boq.vat)],
+    ['Subtotal', formatKES(summary.subtotalBeforeContingency)],
+    ['Contingency (10%)', formatKES(summary.contingency)],
+    ['VAT (16%)', formatKES(summary.vat)],
   ];
   totalsLines.forEach((line, i) => {
     doc.text(line[0], MARGIN + 3, y + 6 + i * 6);
@@ -239,7 +252,7 @@ export function generatePdfReport(plan: FloorPlan, options: PdfOptions = {}): vo
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11);
   doc.text('GRAND TOTAL', MARGIN + 3, y + 27);
-  doc.text(formatKES(boq.total), PAGE_W - MARGIN - 3, y + 27, { align: 'right' });
+  doc.text(formatKES(summary.grandTotal), PAGE_W - MARGIN - 3, y + 27, { align: 'right' });
   doc.setFont('helvetica', 'normal');
   footer();
 
@@ -248,19 +261,19 @@ export function generatePdfReport(plan: FloorPlan, options: PdfOptions = {}): vo
   y = sectionTitle('Cost Summary', MARGIN);
   doc.setFontSize(11);
   doc.setTextColor(...NAVY);
-  doc.text(`Total Estimated Cost: ${formatKES(cost.total)}`, MARGIN, y);
+  doc.text(`Total Estimated Cost: ${formatKES(summary.grandTotal)}`, MARGIN, y);
   y += 7;
   doc.setFontSize(10);
-  doc.text(`Cost per m²: ${formatKES(cost.costPerSqMeter)}  (${cost.bandLabel})`, MARGIN, y);
+  doc.text(`Cost per m² (incl. VAT): ${formatKES(summary.costPerSqMeterInclVAT)}   |   excl. VAT: ${formatKES(summary.costPerSqMeterExclVAT)}`, MARGIN, y);
   y += 10;
   const costCols = [
-    { title: 'Trade', w: 90 },
-    { title: 'Amount (KES)', w: 50 },
-    { title: '% of build', w: 38 },
+    { title: 'Element', w: 100 },
+    { title: 'Amount (KES)', w: 48 },
+    { title: '% of build', w: 30 },
   ];
   y = tableHeader(doc, costCols, y);
-  for (const tc of cost.tradeCosts) {
-    y = tableRow(doc, costCols, [tc.name, formatNum(tc.amount), tc.percent.toFixed(1) + '%'], y);
+  for (const es of summary.elementSubtotals) {
+    y = tableRow(doc, costCols, [es.element, formatNum(es.amount), es.percentage.toFixed(1) + '%'], y);
   }
   y += 4;
   doc.setFontSize(9);

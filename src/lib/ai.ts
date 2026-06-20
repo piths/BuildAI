@@ -205,6 +205,30 @@ export async function generateFloorPlan(
   return normalizeFloorPlan(plan);
 }
 
+const VISION_PROMPT = `${SYSTEM_PROMPT}
+
+IMAGE ANALYSIS MODE:
+You are given an IMAGE of an existing floor plan — it may be a hand drawing, a scanned blueprint, a phone photo, or a CAD/PDF export. Analyse the drawing carefully and reconstruct it as the JSON schema above:
+- Identify every room and label it (use the text in the drawing if present).
+- Read or estimate each room's dimensions. If dimensions are labelled, use them. If not, estimate from the relative sizes in the drawing and standard room proportions (in metres).
+- Detect doors (door swings/arcs) and windows along the walls and place them on the correct sides at roughly the right positions.
+- Detect furniture if shown; otherwise auto-furnish each room appropriately.
+- Preserve the overall arrangement and adjacency of rooms from the drawing, while still obeying the perfect-tiling rectangle rules (snap room edges so they align with no gaps or overlaps).
+Respond with ONLY the valid JSON floor plan — no markdown, no commentary.`;
+
+/** Generate a floor plan from an image of a drawing (photo / scan / CAD export). */
+export async function generateFloorPlanFromImage(
+  imageBase64: string,
+  provider: GenProvider = 'chatgpt'
+): Promise<FloorPlan> {
+  const userContent = [
+    { type: 'image_url' as const, image_url: { url: imageBase64 } },
+    { type: 'text' as const, text: 'Analyse this floor plan drawing and reconstruct it as the full JSON floor plan. Respond with ONLY valid JSON.' },
+  ];
+  const plan = await callGenerateApi(VISION_PROMPT, [{ role: 'user', content: userContent }], provider);
+  return normalizeFloorPlan(plan);
+}
+
 export async function modifyFloorPlan(
   currentPlan: FloorPlan,
   userMessage: string,

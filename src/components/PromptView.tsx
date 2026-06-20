@@ -28,18 +28,20 @@ const fadeUp = {
 
 interface PromptViewProps {
   onGenerate: (prompt: string, provider: GenProvider) => void;
+  onAnalyzeImage?: (imageBase64: string, provider: GenProvider) => void;
   isLoading: boolean;
   initialPrompt?: string;
   onLoadDesign: (floorPlan: FloorPlan, id: string) => void;
 }
 
-export default function PromptView({ onGenerate, isLoading, initialPrompt = '', onLoadDesign }: PromptViewProps) {
+export default function PromptView({ onGenerate, onAnalyzeImage, isLoading, initialPrompt = '', onLoadDesign }: PromptViewProps) {
   const [prompt, setPrompt] = useState(initialPrompt);
   const [signedIn, setSignedIn] = useState(false);
   const [provider, setProvider] = useState<GenProvider>('chatgpt');
   const [importError, setImportError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const dxfInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   // Voice input (Web Speech API)
   const [isListening, setIsListening] = useState(false);
@@ -156,8 +158,27 @@ export default function PromptView({ onGenerate, isLoading, initialPrompt = '', 
     setSignedIn(false);
   };
 
+  const handleDrawingImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setImportError('Please choose an image file (PNG, JPG, JPEG, WEBP).');
+      return;
+    }
+    setImportError(null);
+    // ChatGPT provider needs sign-in; OpenRouter does not.
+    if (provider === 'chatgpt' && !signedIn) {
+      startChatGPTSignIn();
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => onAnalyzeImage?.(reader.result as string, provider);
+    reader.readAsDataURL(file);
+  };
+
   return (
-    <div className="h-screen overflow-y-auto bg-[#0a0a14] relative">
+    <div className="h-screen overflow-y-auto overflow-x-hidden bg-[#0a0a14] relative">
       {/* Ambient gradient wash */}
       <div className="absolute inset-0 bg-gradient-to-br from-accent-primary/[0.05] via-transparent to-accent-secondary/[0.05] blur-3xl pointer-events-none" />
 
@@ -428,11 +449,30 @@ export default function PromptView({ onGenerate, isLoading, initialPrompt = '', 
                 </>
               )}
             </button>
+            <span className="text-text-secondary/30">·</span>
+            <button
+              onClick={() => imageInputRef.current?.click()}
+              disabled={isLoading}
+              className="text-accent-primary/80 hover:text-accent-primary text-sm font-body flex items-center gap-1.5 transition-colors disabled:opacity-50"
+              title="Upload a photo, scan or export of an existing floor plan drawing"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              Upload drawing (image)
+            </button>
             <input
               ref={dxfInputRef}
               type="file"
               accept=".dxf,.dwg"
               onChange={handleDxfImport}
+              className="hidden"
+            />
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/jpg,image/webp"
+              onChange={handleDrawingImport}
               className="hidden"
             />
           </div>

@@ -12,8 +12,46 @@ export function generateBuilding3D(floor: Floor, scene: THREE.Scene): THREE.Grou
     buildingGroup.add(roomGroup);
   }
 
+  // Structural layer (columns & beams)
+  addStructure3D(buildingGroup, floor, floorHeight);
+
   scene.add(buildingGroup);
   return buildingGroup;
+}
+
+const CONCRETE_COLOR = 0xcfcabd;
+
+/** Build columns and beams for the floor and add them to the group. */
+export function addStructure3D(group: THREE.Group, floor: Floor, floorHeight: number): void {
+  const mat = new THREE.MeshStandardMaterial({ color: CONCRETE_COLOR, roughness: 0.85 });
+
+  for (const col of floor.columns || []) {
+    let geo: THREE.BufferGeometry;
+    if (col.shape === 'circular') {
+      geo = new THREE.CylinderGeometry(col.widthMeters / 2, col.widthMeters / 2, floorHeight, 20);
+    } else {
+      geo = new THREE.BoxGeometry(col.widthMeters, floorHeight, col.depthMeters);
+    }
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(col.x, floorHeight / 2, col.y);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+  }
+
+  for (const beam of floor.beams || []) {
+    const dx = beam.x2 - beam.x1;
+    const dz = beam.y2 - beam.y1;
+    const len = Math.hypot(dx, dz);
+    if (len < 0.01) continue;
+    const geo = new THREE.BoxGeometry(len, beam.depthMeters, beam.widthMeters);
+    const mesh = new THREE.Mesh(geo, mat);
+    // Sit the beam just under the ceiling.
+    mesh.position.set((beam.x1 + beam.x2) / 2, floorHeight - beam.depthMeters / 2, (beam.y1 + beam.y2) / 2);
+    mesh.rotation.y = -Math.atan2(dz, dx);
+    mesh.castShadow = true;
+    group.add(mesh);
+  }
 }
 
 function createRoom3D(room: Room, floorHeight: number): THREE.Group {
