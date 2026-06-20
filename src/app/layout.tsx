@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import { LanguageProvider } from '@/lib/i18n';
 
 export const metadata: Metadata = {
   title: 'BuildAI — AI-Powered Floor Plan Generator & 3D Walkthrough',
@@ -23,7 +24,7 @@ export default function RootLayout({
         />
       </head>
       <body className="font-body antialiased bg-bg-primary text-text-primary">
-        {children}
+        <LanguageProvider>{children}</LanguageProvider>
       </body>
     </html>
   );

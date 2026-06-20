@@ -4,13 +4,14 @@ import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Circle } from 'lucide-react';
 import { PRESET_PROMPTS } from '@/lib/constants';
-import { isSignedInWithChatGPT, signOutChatGPT, startChatGPTSignIn } from '@/lib/ai';
+import { isSignedInWithChatGPT, signOutChatGPT, startChatGPTSignIn, GenProvider, GENERATION_PROVIDERS } from '@/lib/ai';
 import { FloorPlan } from '@/lib/types';
 import { ElegantShape } from './ui/shape-landing-hero';
 import { importDxf } from '@/lib/dxf';
 import UsageBadge from './UsageBadge';
 import SavedDesigns from './SavedDesigns';
 import Showcase from './Showcase';
+import LanguageToggle from './LanguageToggle';
 
 const fadeUp = {
   hidden: { opacity: 0, y: 30 },
@@ -26,7 +27,7 @@ const fadeUp = {
 };
 
 interface PromptViewProps {
-  onGenerate: (prompt: string) => void;
+  onGenerate: (prompt: string, provider: GenProvider) => void;
   isLoading: boolean;
   initialPrompt?: string;
   onLoadDesign: (floorPlan: FloorPlan, id: string) => void;
@@ -35,22 +36,64 @@ interface PromptViewProps {
 export default function PromptView({ onGenerate, isLoading, initialPrompt = '', onLoadDesign }: PromptViewProps) {
   const [prompt, setPrompt] = useState(initialPrompt);
   const [signedIn, setSignedIn] = useState(false);
+  const [provider, setProvider] = useState<GenProvider>('chatgpt');
   const [importError, setImportError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const dxfInputRef = useRef<HTMLInputElement>(null);
 
+  // Voice input (Web Speech API)
+  const [isListening, setIsListening] = useState(false);
+  const [voiceSupported, setVoiceSupported] = useState(false);
+  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
+  const baseTranscriptRef = useRef('');
+
   useEffect(() => {
     setSignedIn(isSignedInWithChatGPT());
+    if (typeof window !== 'undefined') {
+      setVoiceSupported(!!(window.SpeechRecognition || window.webkitSpeechRecognition));
+    }
+    return () => {
+      recognitionRef.current?.abort();
+    };
   }, []);
+
+  const toggleVoice = () => {
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+      return;
+    }
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;
+    const recognition = new SR();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-KE'; // Kenyan English
+    baseTranscriptRef.current = prompt ? prompt.trim() + ' ' : '';
+
+    recognition.onresult = (event) => {
+      const transcript = Array.from({ length: event.results.length })
+        .map((_, i) => event.results[i][0].transcript)
+        .join('');
+      setPrompt(baseTranscriptRef.current + transcript);
+    };
+    recognition.onerror = () => setIsListening(false);
+    recognition.onend = () => setIsListening(false);
+
+    recognitionRef.current = recognition;
+    recognition.start();
+    setIsListening(true);
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!signedIn) {
+    const needsSignIn = provider === 'chatgpt' && !signedIn;
+    if (needsSignIn) {
       startChatGPTSignIn();
       return;
     }
     if (prompt.trim() && !isLoading) {
-      onGenerate(prompt.trim());
+      onGenerate(prompt.trim(), provider);
     }
   };
 
@@ -179,6 +222,10 @@ export default function PromptView({ onGenerate, isLoading, initialPrompt = '', 
 
       {/* Content */}
       <div className="relative z-10 max-w-4xl mx-auto px-6 pt-20 pb-16">
+        {/* Language toggle */}
+        <div className="absolute top-6 left-6">
+          <LanguageToggle />
+        </div>
         {/* Auth Status */}
         <div className="absolute top-6 right-6 flex flex-col items-end gap-2">
           {signedIn ? (
@@ -261,16 +308,64 @@ export default function PromptView({ onGenerate, isLoading, initialPrompt = '', 
             <label htmlFor="prompt" className="block text-text-primary font-body font-medium mb-3 text-sm">
               Describe your building
             </label>
-            <textarea
-              id="prompt"
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="e.g., A 2-storey house with 3 bedrooms, 2 bathrooms, a modern kitchen, living room, dining area, and a balcony on the second floor"
-              className="w-full h-32 bg-black/20 border border-white/[0.08] rounded-xl px-5 py-4 text-text-primary placeholder-text-secondary/40 font-body text-base resize-none focus:outline-none focus:ring-2 focus:ring-accent-primary/40 focus:border-accent-primary/50 transition-all"
-              disabled={isLoading}
-            />
+
+            {/* Model selector */}
+            <div className="mb-3">
+              <p className="text-text-secondary/70 text-[11px] font-mono uppercase tracking-wider mb-1.5">Model</p>
+              <div className="inline-flex bg-black/20 border border-white/[0.08] rounded-lg p-0.5">
+                {GENERATION_PROVIDERS.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => setProvider(p.id)}
+                    className={`px-3 py-1.5 rounded-md text-xs font-body transition-all text-left ${
+                      provider === p.id
+                        ? 'bg-accent-primary/20 text-accent-primary'
+                        : 'text-text-secondary hover:text-text-primary'
+                    }`}
+                    title={p.sublabel}
+                  >
+                    <span className="block leading-tight">{p.label}</span>
+                    <span className="block text-[9px] text-text-secondary/50 leading-tight">{p.sublabel}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="relative">
+              <textarea
+                id="prompt"
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                placeholder="e.g., A 2-storey house with 3 bedrooms, 2 bathrooms, a modern kitchen, living room, dining area, and a balcony on the second floor"
+                className="w-full h-32 bg-black/20 border border-white/[0.08] rounded-xl px-5 py-4 pr-14 text-text-primary placeholder-text-secondary/40 font-body text-base resize-none focus:outline-none focus:ring-2 focus:ring-accent-primary/40 focus:border-accent-primary/50 transition-all"
+                disabled={isLoading}
+              />
+              {voiceSupported && (
+                <button
+                  type="button"
+                  onClick={toggleVoice}
+                  title={isListening ? 'Stop listening' : 'Speak your building'}
+                  className={`absolute bottom-3 right-3 w-10 h-10 rounded-full flex items-center justify-center transition-all ${
+                    isListening
+                      ? 'bg-red-500 text-white animate-pulse shadow-lg shadow-red-500/40'
+                      : 'bg-bg-card border border-border-custom text-text-secondary hover:text-accent-primary hover:border-accent-primary/40'
+                  }`}
+                >
+                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 14a3 3 0 003-3V5a3 3 0 00-6 0v6a3 3 0 003 3z" />
+                    <path d="M19 11a1 1 0 10-2 0 5 5 0 01-10 0 1 1 0 10-2 0 7 7 0 006 6.92V21a1 1 0 102 0v-3.08A7 7 0 0019 11z" />
+                  </svg>
+                </button>
+              )}
+              {isListening && (
+                <div className="absolute top-3 right-3 flex items-center gap-1.5 px-2.5 py-1 bg-red-500/15 border border-red-500/40 rounded-full">
+                  <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                  <span className="text-red-400 text-[10px] font-mono">Listening…</span>
+                </div>
+              )}
+            </div>
             <div className="mt-4 flex items-center justify-between gap-4">
-              {!signedIn && (
+              {provider === 'chatgpt' && !signedIn && (
                 <p className="text-text-secondary/60 text-xs font-body flex items-center gap-1.5">
                   <svg className="w-3.5 h-3.5 text-accent-warning" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M5 19h14a2 2 0 001.84-2.75L13.74 4a2 2 0 00-3.5 0L3.16 16.25A2 2 0 005 19z" />
@@ -280,7 +375,7 @@ export default function PromptView({ onGenerate, isLoading, initialPrompt = '', 
               )}
               <button
                 type="submit"
-                disabled={(signedIn && !prompt.trim()) || isLoading}
+                disabled={isLoading || ((provider !== 'chatgpt' || signedIn) && !prompt.trim())}
                 className="ml-auto px-8 py-3.5 bg-gradient-to-r from-accent-primary to-accent-secondary text-white font-display font-medium tracking-wide rounded-xl text-sm disabled:opacity-40 disabled:cursor-not-allowed hover:shadow-lg hover:shadow-accent-primary/25 transform hover:scale-[1.02] active:scale-[0.98] transition-all duration-200"
               >
                 {isLoading ? (
@@ -291,15 +386,15 @@ export default function PromptView({ onGenerate, isLoading, initialPrompt = '', 
                     </svg>
                     Generating...
                   </span>
-                ) : signedIn ? (
-                  'Generate Floor Plan'
-                ) : (
+                ) : provider === 'chatgpt' && !signedIn ? (
                   <span className="flex items-center gap-2">
                     <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
                       <path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364l2.0201-1.1638a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.4048-.6813zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0974-2.3616l2.603-1.5018 2.6032 1.5018v3.0036l-2.6032 1.5018-2.603-1.5018z" />
                     </svg>
                     Sign in to Generate
                   </span>
+                ) : (
+                  'Generate Floor Plan'
                 )}
               </button>
             </div>

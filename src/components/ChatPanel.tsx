@@ -2,14 +2,15 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { FloorPlan } from '@/lib/types';
-import { ChatMessage, modifyFloorPlan } from '@/lib/ai';
+import { ChatMessage, modifyFloorPlan, GenProvider } from '@/lib/ai';
 
 interface ChatPanelProps {
   floorPlan: FloorPlan;
   onFloorPlanUpdate: (plan: FloorPlan) => void;
+  provider?: GenProvider;
 }
 
-export default function ChatPanel({ floorPlan, onFloorPlanUpdate }: ChatPanelProps) {
+export default function ChatPanel({ floorPlan, onFloorPlanUpdate, provider = 'chatgpt' }: ChatPanelProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -63,7 +64,7 @@ export default function ChatPanel({ floorPlan, onFloorPlanUpdate }: ChatPanelPro
     setIsLoading(true);
 
     try {
-      const updatedPlan = await modifyFloorPlan(floorPlan, userMessage, messages, image || undefined);
+      const updatedPlan = await modifyFloorPlan(floorPlan, userMessage, messages, image || undefined, provider);
       onFloorPlanUpdate(updatedPlan);
       setMessages((prev) => [
         ...prev,

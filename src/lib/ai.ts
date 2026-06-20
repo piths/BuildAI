@@ -1,4 +1,5 @@
 import { FloorPlan } from './types';
+import { normalizeFloorPlan } from './planNormalizer';
 
 const SYSTEM_PROMPT = `You are an expert architectural floor plan generator. Given a building description, generate a detailed JSON floor plan with PERFECTLY TILED rooms — no gaps, no overlaps.
 
@@ -68,6 +69,16 @@ WALL RULES:
 - Interior shared walls: set hasWall:false if rooms are open to each other, or hasWall:true with a door if separated.
 - Every room MUST be accessible via at least one door.
 
+DOOR & WINDOW PLACEMENT RULES — FOLLOW EXACTLY:
+- MAIN ENTRANCE (REQUIRED): the building MUST have exactly one main entrance — a 0.9m–1.0m door on an EXTERIOR wall of the living room, hallway/corridor, or reception, opening to the outside. Never leave the building with no way in.
+- Windows go ONLY on EXTERIOR walls. NEVER put a window on an interior (shared) wall.
+- Center openings sensibly: keep every door and window at least 0.3m away from any wall corner. Do not place an opening flush against a corner.
+- An opening must fit fully on its wall: positionFromLeft >= 0.3 AND positionFromLeft + widthMeters <= wallLength - 0.3.
+- Do not overlap two openings on the same wall; leave at least 0.2m of solid wall between them.
+- For a door in a shared interior wall, place it roughly centered on the shared edge so it reads cleanly in both rooms.
+- Widths: main entrance 0.9–1.0m; room doors 0.8–0.9m; bathroom/toilet doors 0.7m. Windows 1.0–1.5m wide, sillHeight 0.9 (1.5 for bathrooms), heightMeters 1.2.
+- Each habitable room (living room, bedrooms, kitchen, dining, office) should have at least one window on an exterior wall.
+
 MEASUREMENT RULES:
 - All in meters. Bedrooms: 3×3 to 4×5. Living rooms: 4×4 to 6×6. Kitchen: 3×3 to 4×5. Bathrooms: 2×2 to 3×3. Corridors: 1.2m–1.5m wide.
 - Furniture positions are RELATIVE to room origin. Keep all furniture within room bounds (x + widthMeters <= room widthMeters, y + depthMeters <= room depthMeters).
@@ -99,16 +110,39 @@ export interface ChatMessage {
   content: string;
 }
 
+export type GenProvider = 'chatgpt' | 'openrouter';
+
+export const OPENROUTER_MODEL = 'google/gemini-2.5-flash-lite-preview-09-2025';
+
+export interface ProviderOption {
+  id: GenProvider;
+  label: string;
+  sublabel: string;
+  /** Whether this provider needs the ChatGPT sign-in flow. */
+  requiresChatGptSignIn: boolean;
+}
+
+export const GENERATION_PROVIDERS: ProviderOption[] = [
+  { id: 'chatgpt', label: 'ChatGPT', sublabel: 'GPT-5.5 (your subscription)', requiresChatGptSignIn: true },
+  { id: 'openrouter', label: 'Gemini Flash Lite', sublabel: 'via OpenRouter', requiresChatGptSignIn: false },
+];
+
 async function callGenerateApi(
   systemPrompt: string,
-  messages: Array<{ role: string; content: unknown }>
+  messages: Array<{ role: string; content: unknown }>,
+  provider: GenProvider = 'chatgpt'
 ): Promise<FloorPlan> {
   let response: Response;
   try {
     response = await fetch('/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ systemPrompt, messages }),
+      body: JSON.stringify({
+        systemPrompt,
+        messages,
+        provider,
+        model: provider === 'openrouter' ? OPENROUTER_MODEL : undefined,
+      }),
     });
   } catch (networkErr) {
     throw new Error(
@@ -163,15 +197,20 @@ export async function fetchUsage(): Promise<UsageInfo> {
   return response.json();
 }
 
-export async function generateFloorPlan(userPrompt: string): Promise<FloorPlan> {
-  return callGenerateApi(SYSTEM_PROMPT, [{ role: 'user', content: userPrompt }]);
+export async function generateFloorPlan(
+  userPrompt: string,
+  provider: GenProvider = 'chatgpt'
+): Promise<FloorPlan> {
+  const plan = await callGenerateApi(SYSTEM_PROMPT, [{ role: 'user', content: userPrompt }], provider);
+  return normalizeFloorPlan(plan);
 }
 
 export async function modifyFloorPlan(
   currentPlan: FloorPlan,
   userMessage: string,
   chatHistory: ChatMessage[],
-  imageBase64?: string
+  imageBase64?: string,
+  provider: GenProvider = 'chatgpt'
 ): Promise<FloorPlan> {
   let userContent: string | Array<{ type: string; text?: string; image_url?: { url: string } }>;
   if (imageBase64) {
@@ -193,5 +232,5 @@ export async function modifyFloorPlan(
     { role: 'user', content: userContent },
   ];
 
-  return callGenerateApi(MODIFY_PROMPT, messages);
+  return callGenerateApi(MODIFY_PROMPT, messages, provider).then(normalizeFloorPlan);
 }

@@ -1,9 +1,11 @@
 'use client';
 
 import { FloorPlan, Floor, Room } from '@/lib/types';
-import { ROOM_COLORS, COST_PER_SQM } from '@/lib/constants';
+import { ROOM_COLORS } from '@/lib/constants';
+import { estimateCost, formatKESShort } from '@/lib/costEstimator';
 import { downloadDxf } from '@/lib/dxf';
 import { downloadIfc } from '@/lib/ifc';
+import { useMemo } from 'react';
 
 interface SidebarProps {
   floorPlan: FloorPlan;
@@ -15,6 +17,9 @@ interface SidebarProps {
   onWalkthrough: () => void;
   onExportJSON: () => void;
   onExportImage: () => void;
+  onGenerateVideo: () => void;
+  videoStatus: 'idle' | 'generating' | 'done' | 'error';
+  videoUrl: string | null;
 }
 
 export default function Sidebar({
@@ -27,11 +32,14 @@ export default function Sidebar({
   onWalkthrough,
   onExportJSON,
   onExportImage,
+  onGenerateVideo,
+  videoStatus,
+  videoUrl,
 }: SidebarProps) {
   const floor = floorPlan.floors[currentFloor];
   const totalArea = floorPlan.totalAreaSqMeters;
   const totalRooms = floorPlan.floors.reduce((sum, f) => sum + f.rooms.length, 0);
-  const estimatedCost = totalArea * COST_PER_SQM;
+  const estimatedCost = useMemo(() => estimateCost(floorPlan).total, [floorPlan]);
 
   return (
     <div className="w-80 bg-bg-secondary border-l border-border-custom h-full overflow-y-auto flex flex-col">
@@ -73,7 +81,7 @@ export default function Sidebar({
           <StatCard label="Floors" value={`${floorPlan.floors.length}`} />
           <StatCard
             label="Est. Cost"
-            value={`KES ${(estimatedCost / 1_000_000).toFixed(2)}M`}
+            value={formatKESShort(estimatedCost)}
           />
         </div>
       </div>
@@ -147,6 +155,38 @@ export default function Sidebar({
         >
           🚶 Walk Through
         </button>
+
+        {/* Video Generation */}
+        <button
+          onClick={onGenerateVideo}
+          disabled={videoStatus === 'generating'}
+          className="w-full px-4 py-2.5 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-display text-xs tracking-wide rounded-lg hover:shadow-lg hover:shadow-purple-500/20 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+        >
+          {videoStatus === 'generating' ? (
+            <span className="flex items-center justify-center gap-2">
+              <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              Generating Video…
+            </span>
+          ) : '🎬 Generate Video'}
+        </button>
+        {videoStatus === 'generating' && (
+          <p className="text-text-secondary/60 text-[10px] font-body text-center">
+            Rendering image & animating (~2-3 min)
+          </p>
+        )}
+        {videoUrl && (
+          <a
+            href={videoUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block w-full px-4 py-2 bg-bg-card border border-purple-500/30 text-purple-400 text-xs rounded-lg hover:border-purple-500/60 transition-all font-body text-center"
+          >
+            ▶ View Generated Video
+          </a>
+        )}
         <div className="grid grid-cols-2 gap-2">
           <button
             onClick={onRegenerate}

@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { FloorPlan, AppMode } from '@/lib/types';
-import { generateFloorPlan } from '@/lib/ai';
+import { generateFloorPlan, GenProvider } from '@/lib/ai';
+import { normalizeFloorPlan } from '@/lib/planNormalizer';
 import { saveDesign } from '@/lib/designStorage';
 import PromptView from '@/components/PromptView';
 import FloorPlanView from '@/components/FloorPlanView';
@@ -15,15 +16,17 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastPrompt, setLastPrompt] = useState('');
+  const [provider, setProvider] = useState<GenProvider>('chatgpt');
   const currentDesignId = useRef<string | null>(null);
 
-  const handleGenerate = async (prompt: string) => {
+  const handleGenerate = async (prompt: string, selectedProvider: GenProvider = provider) => {
     setIsLoading(true);
     setError(null);
     setLastPrompt(prompt);
+    setProvider(selectedProvider);
 
     try {
-      const plan = await generateFloorPlan(prompt);
+      const plan = await generateFloorPlan(prompt, selectedProvider);
       setFloorPlan(plan);
       // New generation → save as a new design
       currentDesignId.current = saveDesign(plan);
@@ -44,7 +47,7 @@ export default function Home() {
   };
 
   const handleLoadDesign = (plan: FloorPlan, id: string) => {
-    setFloorPlan(plan);
+    setFloorPlan(normalizeFloorPlan(plan));
     currentDesignId.current = id;
     setMode('floorplan');
   };
@@ -99,6 +102,7 @@ export default function Home() {
       {mode === 'floorplan' && floorPlan && (
         <FloorPlanView
           floorPlan={floorPlan}
+          provider={provider}
           onFloorPlanUpdate={handleFloorPlanUpdate}
           onRegenerate={handleRegenerate}
           onEditPrompt={handleEditPrompt}

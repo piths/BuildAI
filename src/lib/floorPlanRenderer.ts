@@ -1,4 +1,4 @@
-import { Floor, Room, FurnitureItem, Wall } from './types';
+import { Floor, Room, FurnitureItem, Wall, Opening } from './types';
 import { ROOM_COLORS, SCALE_FACTOR, WALL_THICKNESS } from './constants';
 
 interface RenderOptions {
@@ -8,6 +8,7 @@ interface RenderOptions {
   hoveredRoom: string | null;
   selectedRoom: string | null;
   selectedFurniture?: { roomIndex: number; furnitureIndex: number } | null;
+  selectedOpening?: SelectedOpening | null;
 }
 
 export function renderFloorPlan(
@@ -17,7 +18,7 @@ export function renderFloorPlan(
   canvasHeight: number,
   options: RenderOptions
 ) {
-  const { scale, offsetX, offsetY, hoveredRoom, selectedRoom, selectedFurniture } = options;
+  const { scale, offsetX, offsetY, hoveredRoom, selectedRoom, selectedFurniture, selectedOpening } = options;
   const s = scale;
 
   // Clear canvas
@@ -57,6 +58,11 @@ export function renderFloorPlan(
     if (room && item) {
       drawFurnitureSelection(ctx, room, item, s);
     }
+  }
+
+  // Draw selection for selected opening (door/window)
+  if (selectedOpening) {
+    drawOpeningSelection(ctx, floor, selectedOpening, s);
   }
 
   ctx.restore();
@@ -276,7 +282,8 @@ function drawWallWithOpenings(
   scale: number,
   direction: 'horizontal' | 'vertical'
 ) {
-  if (wall.openings.length === 0) {
+  const openings = wall.openings || [];
+  if (openings.length === 0) {
     ctx.beginPath();
     ctx.moveTo(x1, y1);
     ctx.lineTo(x2, y2);
@@ -285,7 +292,7 @@ function drawWallWithOpenings(
   }
 
   // Sort openings by position
-  const sorted = [...wall.openings].sort((a, b) => a.positionFromLeft - b.positionFromLeft);
+  const sorted = [...openings].sort((a, b) => a.positionFromLeft - b.positionFromLeft);
   let currentPos = 0;
   const totalLength = direction === 'horizontal' ? Math.abs(x2 - x1) : Math.abs(y2 - y1);
 
@@ -1140,6 +1147,161 @@ export function getRoomAtPosition(
     if (worldX >= rx && worldX <= rx + rw && worldY >= ry && worldY <= ry + rh) {
       return room;
     }
+  }
+  return null;
+}
+
+// --- Opening (door/window) hit-testing ---
+
+export interface SelectedOpening {
+  roomIndex: number;
+  wallSide: 'north' | 'south' | 'east' | 'west';
+  openingIndex: number;
+}
+
+export function getOpeningAtPosition(
+  floor: Floor,
+  worldX: number,
+  worldY: number,
+  scale: number
+): SelectedOpening | null {
+  const tolerance = 10; // pixels
+
+  for (let ri = 0; ri < floor.rooms.length; ri++) {
+    const room = floor.rooms[ri];
+    const rx = room.x * scale;
+    const ry = room.y * scale;
+    const rw = room.widthMeters * scale;
+    const rh = room.depthMeters * scale;
+
+    const walls: Array<{ side: 'north' | 'south' | 'east' | 'west'; wall: Wall; baseX: number; baseY: number; direction: 'horizontal' | 'vertical' }> = [
+      { side: 'north', wall: room.walls.north, baseX: rx, baseY: ry, direction: 'horizontal' },
+      { side: 'south', wall: room.walls.south, baseX: rx, baseY: ry + rh, direction: 'horizontal' },
+      { side: 'west', wall: room.walls.west, baseX: rx, baseY: ry, direction: 'vertical' },
+      { side: 'east', wall: room.walls.east, baseX: rx + rw, baseY: ry, direction: 'vertical' },
+    ];
+
+    for (const { side, wall, baseX, baseY, direction } of walls) {
+      if (!wall.hasWall) continue;
+      const openings = wall.openings || [];
+      for (let oi = 0; oi < openings.length; oi++) {
+        const opening = openings[oi];
+        const pos = opening.positionFromLeft * scale;
+        const w = opening.widthMeters * scale;
+
+        if (direction === 'horizontal') {
+          const ox = baseX + pos;
+          const oy = baseY;
+          if (worldX >= ox - 2 && worldX <= ox + w + 2 && Math.abs(worldY - oy) <= tolerance) {
+            return { roomIndex: ri, wallSide: side, openingIndex: oi };
+          }
+        } else {
+          const ox = baseX;
+          const oy = baseY + pos;
+          if (worldY >= oy - 2 && worldY <= oy + w + 2 && Math.abs(worldX - ox) <= tolerance) {
+            return { roomIndex: ri, wallSide: side, openingIndex: oi };
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+export function drawOpeningSelection(
+  ctx: CanvasRenderingContext2D,
+  floor: Floor,
+  sel: SelectedOpening,
+  scale: number
+) {
+  const room = floor.rooms[sel.roomIndex];
+  if (!room) return;
+  const rx = room.x * scale;
+  const ry = room.y * scale;
+  const rw = room.widthMeters * scale;
+  const rh = room.depthMeters * scale;
+
+  const wall = room.walls[sel.wallSide];
+  const openings = wall?.openings || [];
+  const opening = openings[sel.openingIndex];
+  if (!opening) return;
+  const pos = opening.positionFromLeft * scale;
+  const w = opening.widthMeters * scale;
+
+  let ox: number, oy: number, ow: number, oh: number;
+
+  if (sel.wallSide === 'north') {
+    ox = rx + pos; oy = ry - 8; ow = w; oh = 16;
+  } else if (sel.wallSide === 'south') {
+    ox = rx + pos; oy = ry + rh - 8; ow = w; oh = 16;
+  } else if (sel.wallSide === 'west') {
+    ox = rx - 8; oy = ry + pos; ow = 16; oh = w;
+  } else {
+    ox = rx + rw - 8; oy = ry + pos; ow = 16; oh = w;
+  }
+
+  ctx.save();
+  ctx.strokeStyle = opening.type === 'door' ? '#00d4ff' : '#60a5fa';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([4, 3]);
+  ctx.strokeRect(ox, oy, ow, oh);
+  ctx.setLineDash([]);
+
+  // Drag handles at each end
+  const handleSize = 6;
+  ctx.fillStyle = opening.type === 'door' ? '#00d4ff' : '#60a5fa';
+  if (sel.wallSide === 'north' || sel.wallSide === 'south') {
+    // Left handle
+    ctx.fillRect(ox - handleSize / 2, oy + oh / 2 - handleSize / 2, handleSize, handleSize);
+    // Right handle
+    ctx.fillRect(ox + ow - handleSize / 2, oy + oh / 2 - handleSize / 2, handleSize, handleSize);
+  } else {
+    // Top handle
+    ctx.fillRect(ox + ow / 2 - handleSize / 2, oy - handleSize / 2, handleSize, handleSize);
+    // Bottom handle
+    ctx.fillRect(ox + ow / 2 - handleSize / 2, oy + oh - handleSize / 2, handleSize, handleSize);
+  }
+  ctx.restore();
+}
+
+export type OpeningHandleType = 'start' | 'end' | 'body' | null;
+
+export function getOpeningHandleAtPosition(
+  floor: Floor,
+  sel: SelectedOpening,
+  worldX: number,
+  worldY: number,
+  scale: number
+): OpeningHandleType {
+  const room = floor.rooms[sel.roomIndex];
+  if (!room) return null;
+  const rx = room.x * scale;
+  const ry = room.y * scale;
+  const rw = room.widthMeters * scale;
+  const rh = room.depthMeters * scale;
+
+  const wall = room.walls[sel.wallSide];
+  const openings = wall?.openings || [];
+  const opening = openings[sel.openingIndex];
+  if (!opening) return null;
+  const pos = opening.positionFromLeft * scale;
+  const w = opening.widthMeters * scale;
+  const tol = 8;
+
+  if (sel.wallSide === 'north' || sel.wallSide === 'south') {
+    const baseX = rx + pos;
+    const baseY = sel.wallSide === 'north' ? ry : ry + rh;
+    if (Math.abs(worldY - baseY) > 12) return null;
+    if (Math.abs(worldX - baseX) <= tol) return 'start';
+    if (Math.abs(worldX - (baseX + w)) <= tol) return 'end';
+    if (worldX >= baseX && worldX <= baseX + w) return 'body';
+  } else {
+    const baseX = sel.wallSide === 'west' ? rx : rx + rw;
+    const baseY = ry + pos;
+    if (Math.abs(worldX - baseX) > 12) return null;
+    if (Math.abs(worldY - baseY) <= tol) return 'start';
+    if (Math.abs(worldY - (baseY + w)) <= tol) return 'end';
+    if (worldY >= baseY && worldY <= baseY + w) return 'body';
   }
   return null;
 }

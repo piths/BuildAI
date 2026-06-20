@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from 'next/server';
 const CODEX_RESPONSES_URL = 'https://chatgpt.com/backend-api/codex/responses';
 const TOKEN_URL = 'https://auth.openai.com/oauth/token';
 const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.5-flash-lite-preview-09-2025';
 
 interface ChatMsg {
   role: string;
@@ -242,10 +244,75 @@ async function callWithRetry(
   throw lastError!;
 }
 
+/**
+ * Calls OpenRouter (OpenAI-compatible chat completions). Used for alternative
+ * models such as google/gemini-2.5-flash-lite-preview-09-2025. The messages are
+ * already in OpenAI format (string or multimodal content arrays), so they pass
+ * through unchanged with the system prompt prepended.
+ */
+async function callOpenRouter(
+  model: string,
+  systemPrompt: string,
+  messages: ChatMsg[]
+): Promise<string> {
+  const key = process.env.OPENROUTER_API_KEY;
+  if (!key) {
+    throw new Error('OpenRouter is not configured. Add OPENROUTER_API_KEY to .env.local');
+  }
+
+  const response = await fetch(OPENROUTER_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+      // Optional attribution headers recommended by OpenRouter.
+      'HTTP-Referer': 'https://buildai.local',
+      'X-Title': 'BuildAI',
+    },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: 'system', content: systemPrompt }, ...messages],
+      temperature: 0.4,
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`OpenRouter error (${response.status}): ${err}`);
+  }
+
+  const data = await response.json();
+  const text = data.choices?.[0]?.message?.content;
+  if (!text || typeof text !== 'string') {
+    throw new Error('OpenRouter returned an empty response. Please try again.');
+  }
+  return text;
+}
+
+/** Strip markdown fences and parse the model output into a floor-plan object. */
+function parseFloorPlan(rawText: string) {
+  const jsonText = rawText.replace(/```json|```/g, '').trim();
+  try {
+    return JSON.parse(jsonText);
+  } catch {
+    const match = jsonText.match(/\{[\s\S]*\}/);
+    if (match) return JSON.parse(match[0]);
+    throw new Error('The AI response was incomplete or not valid JSON. Please try again.');
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const { systemPrompt, messages } = await request.json();
+    const { systemPrompt, messages, provider, model } = await request.json();
 
+    // ── OpenRouter provider (e.g. Gemini) — uses a server API key, no sign-in ──
+    if (provider === 'openrouter') {
+      const rawText = await callOpenRouter(model || DEFAULT_OPENROUTER_MODEL, systemPrompt, messages);
+      const floorPlan = parseFloorPlan(rawText);
+      return NextResponse.json({ floorPlan });
+    }
+
+    // ── Default: ChatGPT subscription via the Codex backend ──
     const accessToken = request.cookies.get('chatgpt_access_token')?.value;
     const accountId = request.cookies.get('chatgpt_account_id')?.value || '';
     const refreshToken = request.cookies.get('chatgpt_refresh_token')?.value;
@@ -266,19 +333,7 @@ export async function POST(request: NextRequest) {
     );
 
     // Strip markdown fences and parse JSON
-    const jsonText = rawText.replace(/```json|```/g, '').trim();
-    let floorPlan;
-    try {
-      floorPlan = JSON.parse(jsonText);
-    } catch {
-      // Try to recover a JSON object if there's surrounding text
-      const match = jsonText.match(/\{[\s\S]*\}/);
-      if (match) {
-        floorPlan = JSON.parse(match[0]);
-      } else {
-        throw new Error('The AI response was incomplete or not valid JSON. Please try again.');
-      }
-    }
+    const floorPlan = parseFloorPlan(rawText);
 
     const res = NextResponse.json({ floorPlan });
 
