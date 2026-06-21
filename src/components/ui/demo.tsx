@@ -1,4 +1,5 @@
 import { HeroGeometric } from "@/components/ui/shape-landing-hero";
+import { Hero2 } from "@/components/ui/hero-2-1";
 
 function DemoHeroGeometric() {
   return (
@@ -10,4 +11,12 @@ function DemoHeroGeometric() {
   );
 }
 
-export { DemoHeroGeometric };
+const DemoOne = () => {
+  return (
+    <div>
+      <Hero2 />
+    </div>
+  );
+};
+
+export { DemoHeroGeometric, DemoOne };

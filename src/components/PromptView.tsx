@@ -8,6 +8,8 @@ import { isSignedInWithChatGPT, signOutChatGPT, startChatGPTSignIn, GenProvider,
 import { FloorPlan } from '@/lib/types';
 import { ElegantShape } from './ui/shape-landing-hero';
 import { importDxf } from '@/lib/dxf';
+import { useSmoothScroll } from '@/lib/useSmoothScroll';
+import { useAuth } from '@/lib/auth-context';
 import UsageBadge from './UsageBadge';
 import SavedDesigns from './SavedDesigns';
 import Showcase from './Showcase';
@@ -42,6 +44,10 @@ export default function PromptView({ onGenerate, onAnalyzeImage, isLoading, init
   const [importing, setImporting] = useState(false);
   const dxfInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useSmoothScroll(scrollRef);
+  const { user, signOut } = useAuth();
 
   // Voice input (Web Speech API)
   const [isListening, setIsListening] = useState(false);
@@ -178,27 +184,25 @@ export default function PromptView({ onGenerate, onAnalyzeImage, isLoading, init
   };
 
   return (
-    <div className="h-screen overflow-y-auto overflow-x-hidden bg-[#0a0a14] relative">
-      {/* Ambient gradient wash */}
-      <div className="absolute inset-0 bg-gradient-to-br from-accent-primary/[0.05] via-transparent to-accent-secondary/[0.05] blur-3xl pointer-events-none" />
+    <div ref={scrollRef} className="h-screen overflow-y-auto overflow-x-hidden bg-[#0a0a14] relative">
+      {/* Decorative background — FIXED so it composites once and does not repaint on scroll */}
+      <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">
+        {/* Ambient gradient wash */}
+        <div className="absolute inset-0 bg-gradient-to-br from-accent-primary/[0.05] via-transparent to-accent-secondary/[0.05] blur-3xl" />
 
-      {/* Animated blueprint grid */}
-      <div className="absolute inset-0 opacity-30">
+        {/* Blueprint grid (static — no per-frame repaint) */}
         <div
-          className="absolute inset-0"
+          className="absolute inset-0 opacity-30"
           style={{
             backgroundImage: `
               linear-gradient(rgba(0, 212, 255, 0.03) 1px, transparent 1px),
               linear-gradient(90deg, rgba(0, 212, 255, 0.03) 1px, transparent 1px)
             `,
             backgroundSize: '60px 60px',
-            animation: 'gridMove 20s linear infinite',
           }}
         />
-      </div>
 
-      {/* Elegant floating shapes */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        {/* Elegant floating shapes */}
         <ElegantShape
           delay={0.3}
           width={600}
@@ -249,6 +253,21 @@ export default function PromptView({ onGenerate, onAnalyzeImage, isLoading, init
         </div>
         {/* Auth Status */}
         <div className="absolute top-6 right-6 flex flex-col items-end gap-2">
+          {user && (
+            <div className="flex items-center gap-2 bg-bg-secondary/80 backdrop-blur-sm border border-border-custom rounded-lg px-3 py-1.5">
+              <span className="w-5 h-5 rounded-full bg-gradient-to-br from-accent-primary to-accent-secondary flex items-center justify-center text-white text-[10px] font-display">
+                {(user.email || '?').charAt(0).toUpperCase()}
+              </span>
+              <span className="text-text-secondary text-xs font-body max-w-[160px] truncate">{user.email}</span>
+              <button
+                onClick={() => signOut()}
+                className="text-text-secondary/60 text-xs hover:text-accent-danger transition-colors ml-1"
+                title="Sign out of BuildAI"
+              >
+                Sign out
+              </button>
+            </div>
+          )}
           {signedIn ? (
             <>
               <div className="flex items-center gap-2">

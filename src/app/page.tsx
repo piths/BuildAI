@@ -8,6 +8,9 @@ import { normalizeFloorPlan } from '@/lib/planNormalizer';
 import { saveDesign } from '@/lib/designStorage';
 import PromptView from '@/components/PromptView';
 import LoadingAnimation from '@/components/LoadingAnimation';
+import AuthScreen from '@/components/AuthScreen';
+import LandingPage from '@/components/LandingPage';
+import { useAuth } from '@/lib/auth-context';
 
 // Heavy, interactive-only views are code-split so the landing page bundle stays
 // light (Three.js, jsPDF, the analysis suite load only when actually opened).
@@ -15,6 +18,8 @@ const FloorPlanView = dynamic(() => import('@/components/FloorPlanView'), { ssr:
 const WalkthroughView = dynamic(() => import('@/components/WalkthroughView'), { ssr: false });
 
 export default function Home() {
+  const { user, loading: authLoading } = useAuth();
+  const [showAuth, setShowAuth] = useState(false);
   const [mode, setMode] = useState<AppMode>('prompt');
   const [floorPlan, setFloorPlan] = useState<FloorPlan | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -100,6 +105,25 @@ export default function Home() {
   const handleBackToFloorPlan = () => {
     setMode('floorplan');
   };
+
+  // ── Auth gate (SaaS) ───────────────────────────────────────────────────────
+  if (authLoading) {
+    return (
+      <main className="h-screen w-screen overflow-hidden bg-[#0a0a14] flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <svg className="w-8 h-8 animate-spin text-accent-primary" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" opacity="0.3" />
+            <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+          </svg>
+          <p className="text-text-secondary text-sm font-body">Loading BuildAI…</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (!user) {
+    return showAuth ? <AuthScreen onBack={() => setShowAuth(false)} /> : <LandingPage onGetStarted={() => setShowAuth(true)} />;
+  }
 
   return (
     <main className="h-screen w-screen overflow-hidden">

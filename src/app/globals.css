@@ -98,3 +98,10 @@ canvas {
   background: rgba(0, 212, 255, 0.3);
   color: #e2e8f0;
 }
+
+/* Grain/noise texture utilities used by ui/hero-2-1 (SVG fractal noise, no asset needed) */
+.bg-noise,
+.bg-grainy {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+}
