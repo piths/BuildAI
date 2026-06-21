@@ -14,11 +14,28 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const supabase = useMemo(() => createClient(), []);
+  // Only construct a client when Supabase is configured. This keeps the static
+  // build/prerender from crashing if the NEXT_PUBLIC_SUPABASE_* env vars are
+  // absent (e.g. before they're set in the hosting dashboard).
+  const supabase = useMemo(() => {
+    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY) {
+      return null;
+    }
+    try {
+      return createClient();
+    } catch {
+      return null;
+    }
+  }, []);
+
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!supabase) {
+      setLoading(false);
+      return;
+    }
     let mounted = true;
 
     supabase.auth.getSession().then(({ data }) => {
@@ -43,7 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     session,
     loading,
     signOut: async () => {
-      await supabase.auth.signOut();
+      if (supabase) await supabase.auth.signOut();
     },
   };
 
